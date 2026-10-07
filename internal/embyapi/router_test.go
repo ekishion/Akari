@@ -127,6 +127,7 @@ func TestSetupRouter(t *testing.T) {
 		t.Fatalf("expected 200 for Views, got %d: %s", wViews.Code, wViews.Body.String())
 	}
 	viewsBody := wViews.Body.String()
+	t.Logf("VIEWS JSON:\n%s\n", viewsBody)
 	if !strings.Contains(viewsBody, "view_schedule") || !strings.Contains(viewsBody, "FileSystem") {
 		t.Fatalf("expected view_schedule and FileSystem in Views response: %s", viewsBody)
 	}
@@ -167,5 +168,29 @@ func TestSetupRouter(t *testing.T) {
 	}
 	if !strings.Contains(wDispPref.Body.String(), "CustomPrefs") {
 		t.Fatalf("expected CustomPrefs in DisplayPreferences: %s", wDispPref.Body.String())
+	}
+
+	// 10. Test GET /emby/Users/admin/Items/Latest (Must return JSON array [ ... ])
+	reqLatest := httptest.NewRequest(http.MethodGet, "/emby/Users/admin/Items/Latest?Limit=10", nil)
+	wLatest := httptest.NewRecorder()
+	r.ServeHTTP(wLatest, reqLatest)
+	if wLatest.Code != http.StatusOK {
+		t.Fatalf("expected 200 for Latest, got %d: %s", wLatest.Code, wLatest.Body.String())
+	}
+	latestBody := strings.TrimSpace(wLatest.Body.String())
+	if !strings.HasPrefix(latestBody, "[") || !strings.HasSuffix(latestBody, "]") {
+		t.Fatalf("Latest endpoint MUST return a direct JSON array, got: %s", latestBody)
+	}
+
+	// 11. Test GET /emby/Items/view_schedule/Images/Primary (Must return PNG or JPEG, not SVG)
+	reqViewImg := httptest.NewRequest(http.MethodGet, "/emby/Items/view_schedule/Images/Primary", nil)
+	wViewImg := httptest.NewRecorder()
+	r.ServeHTTP(wViewImg, reqViewImg)
+	if wViewImg.Code != http.StatusOK {
+		t.Fatalf("expected 200 for view image, got %d", wViewImg.Code)
+	}
+	ct := wViewImg.Header().Get("Content-Type")
+	if !strings.Contains(ct, "image/png") && !strings.Contains(ct, "image/jpeg") {
+		t.Fatalf("expected image/png or image/jpeg for view image, got %s", ct)
 	}
 }

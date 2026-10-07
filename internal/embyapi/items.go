@@ -1,7 +1,11 @@
 package embyapi
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
 	"strconv"
@@ -15,6 +19,19 @@ import (
 	"akari-bridge/internal/model"
 	"akari-bridge/internal/storage"
 )
+
+func generateFallbackPNG(r, g, b uint8, width, height int) []byte {
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	c := color.RGBA{R: r, G: g, B: b, A: 255}
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, c)
+		}
+	}
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}
 
 type ItemsHandler struct {
 	cfg           *config.Config
@@ -623,34 +640,155 @@ func (h *ItemsHandler) GetSimilarItems(c *gin.Context) {
 	c.JSON(http.StatusOK, model.NewQueryResult([]model.BaseItemDto{}))
 }
 
+// GetLatestItems handles GET /emby/Users/:id/Items/Latest and /emby/Items/Latest
+// Standard Emby returns []BaseItemDto array
+func (h *ItemsHandler) GetLatestItems(c *gin.Context) {
+	userId := c.Param("id")
+	if userId == "" {
+		userId = c.GetString("userId")
+	}
+	parentId := c.Query("ParentId")
+	limitStr := c.DefaultQuery("Limit", "16")
+	limit, _ := strconv.Atoi(limitStr)
+	if limit <= 0 {
+		limit = 16
+	}
+
+	items := make([]model.BaseItemDto, 0)
+
+	switch parentId {
+	case mapper.ViewIdSchedule:
+		subjects, err := h.bangumiClient.GetCalendar()
+		if err == nil {
+			for _, sub := range subjects {
+				item := mapper.SubjectToSeries(&sub, h.cfg.ServerId)
+				if h.db != nil {
+					item.UserData = h.db.GetUserItemData(userId, item.Id)
+				}
+				items = append(items, item)
+			}
+		}
+	case mapper.ViewIdWatching:
+		var userSubjects []bangumi.BangumiSubject
+		seenSubject := make(map[int]bool)
+
+		if h.db != nil {
+			watchingSubIds := h.db.GetUserWatchingSubjectIDs(userId, limit+10)
+			for _, sid := range watchingSubIds {
+				if !seenSubject[sid] {
+					if sub, err := h.bangumiClient.GetSubject(sid); err == nil && sub != nil {
+						seenSubject[sid] = true
+						userSubjects = append(userSubjects, *sub)
+					}
+				}
+			}
+		}
+
+		if h.authSvc != nil {
+			bgmToken, bgmUid := h.authSvc.GetUserBangumi(userId)
+			if bgmUid != "" || bgmToken != "" {
+				userTarget := bgmUid
+				if userTarget == "" {
+					userTarget = "@me"
+				}
+				if subs, err := h.bangumiClient.GetUserCollections(userTarget, bgmToken, 3, limit, 0); err == nil && len(subs) > 0 {
+					for _, sub := range subs {
+						if !seenSubject[sub.Id] {
+							seenSubject[sub.Id] = true
+							userSubjects = append(userSubjects, sub)
+						}
+					}
+				}
+			}
+		}
+
+		for _, sub := range userSubjects {
+			item := mapper.SubjectToSeries(&sub, h.cfg.ServerId)
+			if h.db != nil {
+				item.UserData = h.db.GetUserItemData(userId, item.Id)
+			}
+			items = append(items, item)
+		}
+	case mapper.ViewIdTrending, "":
+		fallthrough
+	default:
+		fetchLimit := limit
+		if fetchLimit < 20 {
+			fetchLimit = 20
+		}
+		subjects, err := h.bangumiClient.GetTrending(fetchLimit, 0)
+		if err == nil {
+			for _, sub := range subjects {
+				item := mapper.SubjectToSeries(&sub, h.cfg.ServerId)
+				if h.db != nil {
+					item.UserData = h.db.GetUserItemData(userId, item.Id)
+				}
+				items = append(items, item)
+			}
+		}
+	}
+
+	if len(items) > limit {
+		items = items[:limit]
+	}
+
+	c.JSON(http.StatusOK, items)
+}
+
 // GetPrimaryImage handles GET /emby/Items/:id/Images/Primary
 func (h *ItemsHandler) GetPrimaryImage(c *gin.Context) {
 	id := c.Param("id")
 
-	// 1. If library view folder, return decorative SVG cover
+	// 1. If library view folder, proxy top anime cover or return PNG
 	if strings.HasPrefix(id, "view_") {
-		c.Header("Content-Type", "image/svg+xml")
-		c.Header("Cache-Control", "public, max-age=86400")
-		label := "ANIME"
+		var topSubId int
 		if strings.Contains(id, "schedule") {
-			label = "放送日历"
+			if cal, err := h.bangumiClient.GetCalendar(); err == nil && len(cal) > 0 {
+				topSubId = cal[0].Id
+			}
 		} else if strings.Contains(id, "trending") {
-			label = "热门排行"
+			if trending, err := h.bangumiClient.GetTrending(1, 0); err == nil && len(trending) > 0 {
+				topSubId = trending[0].Id
+			}
 		} else if strings.Contains(id, "watching") {
-			label = "正在追番"
+			if h.db != nil {
+				watching := h.db.GetUserWatchingSubjectIDs("admin", 1)
+				if len(watching) > 0 {
+					topSubId = watching[0]
+				}
+			}
+			if topSubId == 0 {
+				if trending, err := h.bangumiClient.GetTrending(2, 0); err == nil && len(trending) > 1 {
+					topSubId = trending[1].Id
+				}
+			}
 		}
-		svg := fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600" viewBox="0 0 400 600">
-			<defs>
-				<linearGradient id="bg" x1="0%%" y1="0%%" x2="100%%" y2="100%%">
-					<stop offset="0%%" stop-color="#2E5B28"/>
-					<stop offset="100%%" stop-color="#1B3817"/>
-				</linearGradient>
-			</defs>
-			<rect width="100%%" height="100%%" rx="16" fill="url(#bg)"/>
-			<text x="50%%" y="48%%" font-family="system-ui, sans-serif" font-weight="bold" font-size="36" fill="#FFFFFF" text-anchor="middle">%s</text>
-			<text x="50%%" y="56%%" font-family="system-ui, sans-serif" font-size="20" fill="#A8D5A2" text-anchor="middle">KAZUMI MEDIA</text>
-		</svg>`, label)
-		c.String(http.StatusOK, svg)
+
+		if topSubId > 0 {
+			imgUrl := h.bangumiClient.GetCachedImage(topSubId)
+			if imgUrl == "" {
+				if sub, err := h.bangumiClient.GetSubject(topSubId); err == nil && sub != nil {
+					imgUrl = sub.GetPrimaryImage()
+				}
+			}
+			if imgUrl != "" {
+				if req, err := http.NewRequest(http.MethodGet, imgUrl, nil); err == nil {
+					req.Header.Set("User-Agent", bangumi.BangumiUserAgent)
+					req.Header.Set("Referer", "https://bgm.tv")
+					if resp, err := http.DefaultClient.Do(req); err == nil && resp.StatusCode == http.StatusOK {
+						defer resp.Body.Close()
+						c.Header("Cache-Control", "public, max-age=86400")
+						c.DataFromReader(resp.StatusCode, resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
+						return
+					}
+				}
+			}
+		}
+
+		// Fallback PNG
+		c.Header("Content-Type", "image/png")
+		c.Header("Cache-Control", "public, max-age=86400")
+		c.Data(http.StatusOK, "image/png", generateFallbackPNG(46, 91, 40, 400, 600))
 		return
 	}
 
@@ -667,9 +805,9 @@ func (h *ItemsHandler) GetPrimaryImage(c *gin.Context) {
 	}
 
 	if subId == 0 {
-		c.Header("Content-Type", "image/svg+xml")
+		c.Header("Content-Type", "image/png")
 		c.Header("Cache-Control", "public, max-age=86400")
-		c.String(http.StatusOK, `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="225" viewBox="0 0 400 225"><rect width="100%" height="100%" fill="#1a1c1e"/><text x="50%" y="50%" font-family="system-ui, sans-serif" font-size="20" fill="#ffffff" text-anchor="middle">Kazumi Media</text></svg>`)
+		c.Data(http.StatusOK, "image/png", generateFallbackPNG(26, 28, 30, 400, 225))
 		return
 	}
 
@@ -683,9 +821,9 @@ func (h *ItemsHandler) GetPrimaryImage(c *gin.Context) {
 	}
 
 	if imgUrl == "" {
-		c.Header("Content-Type", "image/svg+xml")
+		c.Header("Content-Type", "image/png")
 		c.Header("Cache-Control", "public, max-age=86400")
-		c.String(http.StatusOK, `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="225" viewBox="0 0 400 225"><rect width="100%" height="100%" fill="#1a1c1e"/><text x="50%" y="50%" font-family="system-ui, sans-serif" font-size="20" fill="#ffffff" text-anchor="middle">Kazumi Media</text></svg>`)
+		c.Data(http.StatusOK, "image/png", generateFallbackPNG(26, 28, 30, 400, 225))
 		return
 	}
 

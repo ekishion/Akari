@@ -180,7 +180,7 @@ func SetupRouter(
 			authed.GET("/Users/:id/GroupingOptions", viewsHandler.GetGroupingOptions)
 			authed.GET("/Users/:id/Items/Root", viewsHandler.GetRootFolder)
 			authed.GET("/Users/:id/Items", itemsHandler.GetUserItems)
-			authed.GET("/Users/:id/Items/Latest", itemsHandler.GetUserItems)
+			authed.GET("/Users/:id/Items/Latest", itemsHandler.GetLatestItems)
 			authed.GET("/Users/:id/Items/Resume", itemsHandler.GetResumeItems)
 			authed.GET("/Users/:id/Items/:itemId", itemsHandler.GetItem)
 			authed.GET("/Users/:id/Items/:itemId/UserData", usersHandler.GetCurrentItemUserData)
@@ -193,6 +193,7 @@ func SetupRouter(
 
 			// Items & Shows
 			authed.GET("/Items", itemsHandler.GetUserItems)
+			authed.GET("/Items/Latest", itemsHandler.GetLatestItems)
 			authed.GET("/Items/:id", itemsHandler.GetItem)
 			authed.GET("/Items/:id/ThemeMedia", itemsHandler.GetThemeMedia)
 			authed.GET("/Items/:id/ThemeSongs", itemsHandler.GetThemeMedia)

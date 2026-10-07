@@ -145,7 +145,7 @@ func IsEpisodeAired(ep *bangumi.BangumiEpisode, sub *bangumi.BangumiSubject) boo
 	return epIndex <= 1
 }
 
-// CreateVirtualViews returns the default library roots as UserView for /Users/:id/Views
+// CreateVirtualViews returns the default library roots as CollectionFolder for /Users/:id/Views
 func CreateVirtualViews(serverId string) []model.BaseItemDto {
 	return []model.BaseItemDto{
 		{
@@ -153,7 +153,7 @@ func CreateVirtualViews(serverId string) []model.BaseItemDto {
 			Id:                       ViewIdSchedule,
 			Guid:                     ViewIdSchedule,
 			ServerId:                 serverId,
-			Type:                     "UserView",
+			Type:                     "CollectionFolder",
 			CollectionType:           "tvshows",
 			LocationType:             "FileSystem",
 			Path:                     "/media/每日放送",
@@ -171,9 +171,10 @@ func CreateVirtualViews(serverId string) []model.BaseItemDto {
 			PlayAccess:               "Full",
 			EnableMediaSourceDisplay: true,
 			UserData: &model.UserItemDataDto{
-				Key:        ViewIdSchedule,
-				IsFavorite: false,
-				Played:     false,
+				Key:               ViewIdSchedule,
+				IsFavorite:        false,
+				Played:            false,
+				UnplayedItemCount: 100,
 			},
 		},
 		{
@@ -181,7 +182,7 @@ func CreateVirtualViews(serverId string) []model.BaseItemDto {
 			Id:                       ViewIdTrending,
 			Guid:                     ViewIdTrending,
 			ServerId:                 serverId,
-			Type:                     "UserView",
+			Type:                     "CollectionFolder",
 			CollectionType:           "tvshows",
 			LocationType:             "FileSystem",
 			Path:                     "/media/热门排行",
@@ -199,9 +200,10 @@ func CreateVirtualViews(serverId string) []model.BaseItemDto {
 			PlayAccess:               "Full",
 			EnableMediaSourceDisplay: true,
 			UserData: &model.UserItemDataDto{
-				Key:        ViewIdTrending,
-				IsFavorite: false,
-				Played:     false,
+				Key:               ViewIdTrending,
+				IsFavorite:        false,
+				Played:            false,
+				UnplayedItemCount: 100,
 			},
 		},
 		{
@@ -209,7 +211,7 @@ func CreateVirtualViews(serverId string) []model.BaseItemDto {
 			Id:                       ViewIdWatching,
 			Guid:                     ViewIdWatching,
 			ServerId:                 serverId,
-			Type:                     "UserView",
+			Type:                     "CollectionFolder",
 			CollectionType:           "tvshows",
 			LocationType:             "FileSystem",
 			Path:                     "/media/正在追番",
@@ -227,9 +229,10 @@ func CreateVirtualViews(serverId string) []model.BaseItemDto {
 			PlayAccess:               "Full",
 			EnableMediaSourceDisplay: true,
 			UserData: &model.UserItemDataDto{
-				Key:        ViewIdWatching,
-				IsFavorite: false,
-				Played:     false,
+				Key:               ViewIdWatching,
+				IsFavorite:        false,
+				Played:            false,
+				UnplayedItemCount: 100,
 			},
 		},
 	}
