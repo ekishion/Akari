@@ -1,0 +1,21 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/akari
+/akari-bridge
+/kazumi-emby-bridge
+/bridge
+
+# Runtime data
+data/
+*.log
+
+# Cache & Build
+.gocache/
+node_modules/
+*/node_modules/
+web/node_modules/
+plan/

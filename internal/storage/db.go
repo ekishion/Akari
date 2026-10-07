@@ -1,0 +1,749 @@
+package storage
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	_ "modernc.org/sqlite"
+	"akari-bridge/internal/config"
+	"akari-bridge/internal/model"
+)
+
+type DB struct {
+	db  *sql.DB
+	cfg *config.Config
+	mu  sync.RWMutex
+}
+
+type PlaybackRecord struct {
+	ItemId         string    `json:"itemId"`
+	PositionTicks  int64     `json:"positionTicks"`
+	TotalTicks     int64     `json:"totalTicks"`
+	Played         bool      `json:"played"`
+	PlayCount      int       `json:"playCount"`
+	LastPlayedDate time.Time `json:"lastPlayedDate"`
+}
+
+type UserRecord struct {
+	ID             string     `json:"id"`
+	Name           string     `json:"name"`
+	PasswordHash   string     `json:"passwordHash"`
+	IsAdmin        bool       `json:"isAdmin"`
+	IsDisabled     bool       `json:"isDisabled"`
+	BgmAccessToken string     `json:"bgmAccessToken"`
+	BgmUserID      string     `json:"bgmUserId"`
+	LastLoginAt    *time.Time `json:"lastLoginAt"`
+	CreatedAt      time.Time  `json:"createdAt"`
+}
+
+func OpenDB(cfg *config.Config) (*DB, error) {
+	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create data dir: %w", err)
+	}
+
+	dbPath := filepath.Join(cfg.DataDir, "bridge.db")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open sqlite database: %w", err)
+	}
+
+	db.SetMaxOpenConns(1) // SQLite works best with 1 writer / serialized in embedded mode
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+
+	s := &DB{
+		db:  db,
+		cfg: cfg,
+	}
+
+	if err := s.initSchema(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to init db schema: %w", err)
+	}
+
+	s.migrateFromJSON()
+
+	log.Printf("[DB] SQLite database initialized at %s", dbPath)
+	return s, nil
+}
+
+func (s *DB) Close() error {
+	return s.db.Close()
+}
+
+func (s *DB) initSchema() error {
+	schema := `
+	CREATE TABLE IF NOT EXISTS users (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		password_hash TEXT DEFAULT '',
+		is_admin INTEGER DEFAULT 0,
+		is_disabled INTEGER DEFAULT 0,
+		bgm_access_token TEXT DEFAULT '',
+		bgm_user_id TEXT DEFAULT '',
+		last_login_at DATETIME,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS user_tokens (
+		token TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL,
+		client_name TEXT DEFAULT '',
+		device_id TEXT DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		expires_at DATETIME,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	);
+
+	CREATE TABLE IF NOT EXISTS playback_histories (
+		user_id TEXT NOT NULL,
+		item_id TEXT NOT NULL,
+		position_ticks INTEGER DEFAULT 0,
+		total_ticks INTEGER DEFAULT 0,
+		played INTEGER DEFAULT 0,
+		play_count INTEGER DEFAULT 0,
+		is_favorite INTEGER DEFAULT 0,
+		last_played_date DATETIME,
+		PRIMARY KEY (user_id, item_id)
+	);
+
+	CREATE TABLE IF NOT EXISTS plugins (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL UNIQUE,
+		version TEXT DEFAULT '',
+		enabled INTEGER DEFAULT 1,
+		data_json TEXT NOT NULL,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS system_settings (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_tokens_user ON user_tokens(user_id);
+	CREATE INDEX IF NOT EXISTS idx_histories_user ON playback_histories(user_id);
+	`
+
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Try adding is_favorite column if upgrading from older schema
+	_, _ = s.db.Exec(`ALTER TABLE playback_histories ADD COLUMN is_favorite INTEGER DEFAULT 0`)
+	return nil
+}
+
+func (s *DB) migrateFromJSON() {
+	// 1. Migrate playback history if exists
+	histFile := filepath.Join(s.cfg.DataDir, "playback_history.json")
+	if data, err := os.ReadFile(histFile); err == nil {
+		var records map[string]PlaybackRecord
+		if err := json.Unmarshal(data, &records); err == nil && len(records) > 0 {
+			tx, err := s.db.Begin()
+			if err == nil {
+				stmt, err := tx.Prepare(`
+					INSERT OR IGNORE INTO playback_histories 
+					(user_id, item_id, position_ticks, total_ticks, played, play_count, is_favorite, last_played_date)
+					VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+				`)
+				if err == nil {
+					for k, r := range records {
+						userId := "admin"
+						itemId := r.ItemId
+						// Key format is userId:itemId or legacy 00000000000000000000000000000001:itemId
+						if idx := len(k); idx > 0 {
+							for i := 0; i < len(k); i++ {
+								if k[i] == ':' {
+									userId = k[:i]
+									itemId = k[i+1:]
+									break
+								}
+							}
+						}
+						if userId == "00000000000000000000000000000001" || userId == "" || userId == "default" {
+							userId = "admin"
+						}
+						playedInt := 0
+						if r.Played {
+							playedInt = 1
+						}
+						_, _ = stmt.Exec(userId, itemId, r.PositionTicks, r.TotalTicks, playedInt, r.PlayCount, r.LastPlayedDate)
+					}
+					_ = stmt.Close()
+					_ = tx.Commit()
+					log.Printf("[DB] Migrated %d playback records from playback_history.json into SQLite", len(records))
+				}
+			}
+		}
+		// Rename migrated file to .bak to avoid re-reading and overwriting DB state on future restarts
+		_ = os.Rename(histFile, histFile+".bak")
+	}
+}
+
+// User Operations
+
+func (s *DB) UpsertUser(u *UserRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	isAdminInt := 0
+	if u.IsAdmin {
+		isAdminInt = 1
+	}
+	isDisabledInt := 0
+	if u.IsDisabled {
+		isDisabledInt = 1
+	}
+
+	query := `
+	INSERT INTO users (id, name, password_hash, is_admin, is_disabled, bgm_access_token, bgm_user_id, last_login_at, created_at)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		name = excluded.name,
+		password_hash = excluded.password_hash,
+		is_admin = excluded.is_admin,
+		is_disabled = excluded.is_disabled,
+		bgm_access_token = excluded.bgm_access_token,
+		bgm_user_id = excluded.bgm_user_id,
+		last_login_at = excluded.last_login_at
+	`
+	_, err := s.db.Exec(query, u.ID, u.Name, u.PasswordHash, isAdminInt, isDisabledInt, u.BgmAccessToken, u.BgmUserID, u.LastLoginAt, u.CreatedAt)
+	return err
+}
+
+func (s *DB) GetUserByID(id string) (*UserRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if id == "00000000000000000000000000000001" || id == "" {
+		id = "admin"
+	}
+
+	row := s.db.QueryRow(`
+		SELECT id, name, password_hash, is_admin, is_disabled, bgm_access_token, bgm_user_id, last_login_at, created_at
+		FROM users WHERE id = ? OR name = ?
+	`, id, id)
+
+	var u UserRecord
+	var isAdminInt, isDisabledInt int
+	var lastLoginAt sql.NullTime
+
+	err := row.Scan(&u.ID, &u.Name, &u.PasswordHash, &isAdminInt, &isDisabledInt, &u.BgmAccessToken, &u.BgmUserID, &lastLoginAt, &u.CreatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	u.IsAdmin = isAdminInt == 1
+	u.IsDisabled = isDisabledInt == 1
+	if lastLoginAt.Valid {
+		u.LastLoginAt = &lastLoginAt.Time
+	}
+	return &u, nil
+}
+
+func (s *DB) ListUsers() ([]*UserRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(`
+		SELECT id, name, password_hash, is_admin, is_disabled, bgm_access_token, bgm_user_id, last_login_at, created_at
+		FROM users ORDER BY created_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []*UserRecord
+	for rows.Next() {
+		var u UserRecord
+		var isAdminInt, isDisabledInt int
+		var lastLoginAt sql.NullTime
+
+		if err := rows.Scan(&u.ID, &u.Name, &u.PasswordHash, &isAdminInt, &isDisabledInt, &u.BgmAccessToken, &u.BgmUserID, &lastLoginAt, &u.CreatedAt); err != nil {
+			continue
+		}
+		u.IsAdmin = isAdminInt == 1
+		u.IsDisabled = isDisabledInt == 1
+		if lastLoginAt.Valid {
+			u.LastLoginAt = &lastLoginAt.Time
+		}
+		list = append(list, &u)
+	}
+	return list, nil
+}
+
+func (s *DB) DeleteUser(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`DELETE FROM users WHERE id = ?`, id)
+	return err
+}
+
+// Token Operations
+
+func (s *DB) SaveToken(token, userId, clientName, deviceId string, expiresAt *time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`
+		INSERT OR REPLACE INTO user_tokens (token, user_id, client_name, device_id, expires_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, token, userId, clientName, deviceId, expiresAt)
+	return err
+}
+
+func (s *DB) GetUserIDByToken(token string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var userId string
+	var expiresAt sql.NullTime
+
+	err := s.db.QueryRow(`SELECT user_id, expires_at FROM user_tokens WHERE token = ?`, token).Scan(&userId, &expiresAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+
+	if expiresAt.Valid && expiresAt.Time.Before(time.Now()) {
+		return "", nil
+	}
+	return userId, nil
+}
+
+func (s *DB) RevokeToken(token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`DELETE FROM user_tokens WHERE token = ?`, token)
+	return err
+}
+
+func (s *DB) RevokeAllUserTokens(userId string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`DELETE FROM user_tokens WHERE user_id = ?`, userId)
+	return err
+}
+
+// Playback History Operations
+
+func (s *DB) UpdatePlaybackProgress(userId, itemId string, ticks, totalTicks int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if userId == "00000000000000000000000000000001" || userId == "" || userId == "default" {
+		userId = "admin"
+	}
+
+	played := 0
+	if totalTicks > 0 && float64(ticks)/float64(totalTicks) >= 0.90 {
+		played = 1
+	}
+
+	query := `
+	INSERT INTO playback_histories (user_id, item_id, position_ticks, total_ticks, played, last_played_date)
+	VALUES (?, ?, ?, ?, ?, ?)
+	ON CONFLICT(user_id, item_id) DO UPDATE SET
+		position_ticks = excluded.position_ticks,
+		total_ticks = CASE WHEN excluded.total_ticks > 0 THEN excluded.total_ticks ELSE playback_histories.total_ticks END,
+		played = CASE WHEN excluded.played = 1 THEN 1 ELSE playback_histories.played END,
+		last_played_date = excluded.last_played_date
+	`
+	_, err := s.db.Exec(query, userId, itemId, ticks, totalTicks, played, time.Now())
+	return err
+}
+
+func (s *DB) MarkPlayed(userId, itemId string, played bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if userId == "00000000000000000000000000000001" || userId == "" || userId == "default" {
+		userId = "admin"
+	}
+
+	playedInt := 0
+	if played {
+		playedInt = 1
+	}
+
+	query := `
+	INSERT INTO playback_histories (user_id, item_id, position_ticks, total_ticks, played, play_count, last_played_date)
+	VALUES (?, ?, CASE WHEN ? = 1 THEN 10000 ELSE 0 END, 10000, ?, ?, ?)
+	ON CONFLICT(user_id, item_id) DO UPDATE SET
+		played = excluded.played,
+		play_count = play_count + CASE WHEN excluded.played = 1 THEN 1 ELSE 0 END,
+		position_ticks = CASE WHEN excluded.played = 1 THEN total_ticks ELSE 0 END,
+		last_played_date = excluded.last_played_date
+	`
+	_, err := s.db.Exec(query, userId, itemId, playedInt, playedInt, playedInt, time.Now())
+	return err
+}
+
+func (s *DB) MarkFavorite(userId, itemId string, isFavorite bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if userId == "00000000000000000000000000000001" || userId == "" || userId == "default" {
+		userId = "admin"
+	}
+
+	favInt := 0
+	if isFavorite {
+		favInt = 1
+	}
+
+	query := `
+	INSERT INTO playback_histories (user_id, item_id, is_favorite, last_played_date)
+	VALUES (?, ?, ?, ?)
+	ON CONFLICT(user_id, item_id) DO UPDATE SET
+		is_favorite = excluded.is_favorite,
+		last_played_date = excluded.last_played_date
+	`
+	_, err := s.db.Exec(query, userId, itemId, favInt, time.Now())
+	return err
+}
+
+func (s *DB) SaveItemDuration(itemId string, totalTicks int64) error {
+	if totalTicks <= 0 || itemId == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `
+	INSERT INTO playback_histories (user_id, item_id, total_ticks, last_played_date)
+	VALUES ('admin', ?, ?, ?)
+	ON CONFLICT(user_id, item_id) DO UPDATE SET
+		total_ticks = CASE WHEN excluded.total_ticks > 0 THEN excluded.total_ticks ELSE playback_histories.total_ticks END
+	`
+	_, err := s.db.Exec(query, itemId, totalTicks, time.Now())
+	return err
+}
+
+func (s *DB) GetItemTotalTicks(itemId string) int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var ticks int64
+	_ = s.db.QueryRow(`
+		SELECT total_ticks FROM playback_histories
+		WHERE item_id = ? AND total_ticks > 0
+		ORDER BY total_ticks DESC LIMIT 1
+	`, itemId).Scan(&ticks)
+	return ticks
+}
+
+func (s *DB) GetUserItemData(userId, itemId string) *model.UserItemDataDto {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if userId == "00000000000000000000000000000001" || userId == "" || userId == "default" {
+		userId = "admin"
+	}
+
+	var posTicks, totalTicks int64
+	var played, playCount, isFavorite int
+	var lastPlayed sql.NullTime
+
+	err := s.db.QueryRow(`
+		SELECT position_ticks, total_ticks, played, play_count, is_favorite, last_played_date
+		FROM playback_histories WHERE user_id = ? AND item_id = ?
+	`, userId, itemId).Scan(&posTicks, &totalTicks, &played, &playCount, &isFavorite, &lastPlayed)
+
+	if err != nil {
+		return &model.UserItemDataDto{
+			Played:                false,
+			PlaybackPositionTicks: 0,
+			PlayCount:            0,
+			IsFavorite:           false,
+			Key:                  itemId,
+		}
+	}
+
+	lastPlayedStr := ""
+	if lastPlayed.Valid {
+		lastPlayedStr = lastPlayed.Time.UTC().Format(time.RFC3339)
+	}
+
+	playedPct := 0.0
+	if totalTicks > 0 {
+		playedPct = float64(posTicks) / float64(totalTicks) * 100.0
+	}
+
+	return &model.UserItemDataDto{
+		Played:                played == 1,
+		PlaybackPositionTicks: posTicks,
+		PlayCount:            playCount,
+		PlayedPercentage:     playedPct,
+		IsFavorite:           isFavorite == 1,
+		LastPlayedDate:        lastPlayedStr,
+		Key:                  itemId,
+	}
+}
+
+func (s *DB) GetUserFavoriteItemIDs(userId string, limit int) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if userId == "00000000000000000000000000000001" || userId == "" || userId == "default" {
+		userId = "admin"
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	rows, err := s.db.Query(`
+		SELECT item_id FROM playback_histories
+		WHERE user_id = ? AND is_favorite = 1
+		ORDER BY last_played_date DESC LIMIT ?
+	`, userId, limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var itemIds []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			itemIds = append(itemIds, id)
+		}
+	}
+	return itemIds
+}
+
+// GetUserWatchingSubjectIDs returns unique Bangumi subject IDs that the user has favorited
+func (s *DB) GetUserWatchingSubjectIDs(userId string, limit int) []int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if userId == "00000000000000000000000000000001" || userId == "" || userId == "default" {
+		userId = "admin"
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+
+	rows, err := s.db.Query(`
+		SELECT item_id FROM playback_histories
+		WHERE user_id = ? AND is_favorite = 1
+		ORDER BY last_played_date DESC LIMIT 100
+	`, userId)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	seen := make(map[int]bool)
+	var subIds []int
+
+	for rows.Next() {
+		var itemId string
+		if err := rows.Scan(&itemId); err == nil {
+			sid := 0
+			if strings.HasPrefix(itemId, "bgm_sub_") {
+				sid, _ = strconv.Atoi(strings.TrimPrefix(itemId, "bgm_sub_"))
+			} else if strings.HasPrefix(itemId, "bgm_ep_") {
+				clean := strings.TrimPrefix(itemId, "bgm_ep_")
+				parts := strings.Split(clean, "_")
+				if len(parts) > 0 {
+					sid, _ = strconv.Atoi(parts[0])
+				}
+			} else if strings.HasPrefix(itemId, "bgm_season_") {
+				clean := strings.TrimPrefix(itemId, "bgm_season_")
+				parts := strings.Split(clean, "_")
+				if len(parts) > 0 {
+					sid, _ = strconv.Atoi(parts[0])
+				}
+			}
+			if sid > 0 && !seen[sid] {
+				seen[sid] = true
+				subIds = append(subIds, sid)
+				if len(subIds) >= limit {
+					break
+				}
+			}
+		}
+	}
+	return subIds
+}
+
+// UnmarkAllSubjectFavorites clears is_favorite for a subject and all its sub-items
+func (s *DB) UnmarkAllSubjectFavorites(userId string, subjectId int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if userId == "00000000000000000000000000000001" || userId == "" || userId == "default" {
+		userId = "admin"
+	}
+
+	prefixSub := fmt.Sprintf("bgm_sub_%d", subjectId)
+	prefixEp := fmt.Sprintf("bgm_ep_%d_%%", subjectId)
+	prefixSeason := fmt.Sprintf("bgm_season_%d_%%", subjectId)
+
+	_, err := s.db.Exec(`
+		UPDATE playback_histories SET is_favorite = 0
+		WHERE user_id = ? AND (item_id = ? OR item_id LIKE ? OR item_id LIKE ?)
+	`, userId, prefixSub, prefixEp, prefixSeason)
+	return err
+}
+
+func (s *DB) GetUserResumeItems(userId string, limit int) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if userId == "00000000000000000000000000000001" || userId == "" || userId == "default" {
+		userId = "admin"
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+
+	rows, err := s.db.Query(`
+		SELECT item_id FROM playback_histories
+		WHERE user_id = ? AND played = 0 AND position_ticks > 0
+		ORDER BY last_played_date DESC LIMIT ?
+	`, userId, limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var itemIds []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			itemIds = append(itemIds, id)
+		}
+	}
+	return itemIds
+}
+
+type TokenRecord struct {
+	Token      string     `json:"token"`
+	UserID     string     `json:"userId"`
+	ClientName string     `json:"clientName"`
+	DeviceID   string     `json:"deviceId"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
+}
+
+func (s *DB) GetTokensByUserID(userId string) ([]*TokenRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if userId == "00000000000000000000000000000001" || userId == "" {
+		userId = "admin"
+	}
+
+	rows, err := s.db.Query(`
+		SELECT token, user_id, client_name, device_id, created_at, expires_at
+		FROM user_tokens WHERE user_id = ? ORDER BY created_at DESC
+	`, userId)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []*TokenRecord
+	for rows.Next() {
+		var t TokenRecord
+		var exp sql.NullTime
+		if err := rows.Scan(&t.Token, &t.UserID, &t.ClientName, &t.DeviceID, &t.CreatedAt, &exp); err == nil {
+			if exp.Valid {
+				t.ExpiresAt = &exp.Time
+			}
+			list = append(list, &t)
+		}
+	}
+	return list, nil
+}
+
+type PlaybackHistoryDetail struct {
+	UserID         string     `json:"userId"`
+	ItemID         string     `json:"itemId"`
+	PositionTicks  int64      `json:"positionTicks"`
+	TotalTicks     int64      `json:"totalTicks"`
+	Played         bool       `json:"played"`
+	PlayCount      int        `json:"playCount"`
+	LastPlayedDate *time.Time `json:"lastPlayedDate"`
+}
+
+func (s *DB) ListRecentHistories(limit int) ([]*PlaybackHistoryDetail, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 {
+		limit = 50
+	}
+
+	rows, err := s.db.Query(`
+		SELECT user_id, item_id, position_ticks, total_ticks, played, play_count, last_played_date
+		FROM playback_histories
+		ORDER BY last_played_date DESC LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []*PlaybackHistoryDetail
+	for rows.Next() {
+		var h PlaybackHistoryDetail
+		var playedInt int
+		var lpd sql.NullTime
+		if err := rows.Scan(&h.UserID, &h.ItemID, &h.PositionTicks, &h.TotalTicks, &playedInt, &h.PlayCount, &lpd); err == nil {
+			h.Played = playedInt == 1
+			if lpd.Valid {
+				h.LastPlayedDate = &lpd.Time
+			}
+			list = append(list, &h)
+		}
+	}
+	return list, nil
+}
+
+type SystemStats struct {
+	UserCount      int   `json:"userCount"`
+	TokenCount     int   `json:"tokenCount"`
+	HistoryCount   int   `json:"historyCount"`
+	DbSizeBytes    int64 `json:"dbSizeBytes"`
+}
+
+func (s *DB) GetStats() (*SystemStats, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	stats := &SystemStats{}
+
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&stats.UserCount)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM user_tokens`).Scan(&stats.TokenCount)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM playback_histories`).Scan(&stats.HistoryCount)
+
+	dbPath := filepath.Join(s.cfg.DataDir, "bridge.db")
+	if fi, err := os.Stat(dbPath); err == nil {
+		stats.DbSizeBytes = fi.Size()
+	}
+
+	return stats, nil
+}
+
