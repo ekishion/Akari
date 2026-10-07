@@ -3,6 +3,7 @@ package embyapi
 import (
 	"context"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -152,6 +153,106 @@ func (h *AdminHandler) GetConfig(c *gin.Context) {
 		"bangumiHost": h.cfg.BangumiHost,
 		"customProxy": proxy,
 		"hasPassword": h.cfg.AdminPassword != "",
+	})
+}
+
+type UpdateConfigReq struct {
+	ServerName  *string `json:"serverName"`
+	BangumiHost *string `json:"bangumiHost"`
+	DanDanHost  *string `json:"dandanHost"`
+	CustomProxy *string `json:"customProxy"`
+}
+
+func (h *AdminHandler) UpdateConfig(c *gin.Context) {
+	var req UpdateConfigReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数格式错误"})
+		return
+	}
+
+	db := h.authSvc.GetDB()
+
+	if req.BangumiHost != nil {
+		host := strings.TrimSpace(*req.BangumiHost)
+		host = strings.TrimRight(host, "/")
+		if host != "" {
+			if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Bangumi 镜像源必须以 http:// 或 https:// 开头"})
+				return
+			}
+			h.cfg.BangumiHost = host
+			h.bgmClient.SetBaseUrl(host)
+			if db != nil {
+				_ = db.SaveSetting("bangumi_host", host)
+			}
+		}
+	}
+
+	if req.DanDanHost != nil {
+		host := strings.TrimSpace(*req.DanDanHost)
+		host = strings.TrimRight(host, "/")
+		if host != "" {
+			if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "DanDan 弹幕源必须以 http:// 或 https:// 开头"})
+				return
+			}
+			h.cfg.DanDanHost = host
+			if h.playbackProxy != nil && h.playbackProxy.danmakuClient != nil {
+				h.playbackProxy.danmakuClient.SetEndpoint(host)
+			}
+			if db != nil {
+				_ = db.SaveSetting("dandan_host", host)
+			}
+		}
+	}
+
+	if req.ServerName != nil {
+		name := strings.TrimSpace(*req.ServerName)
+		if name != "" {
+			h.cfg.ServerName = name
+			if db != nil {
+				_ = db.SaveSetting("server_name", name)
+			}
+		}
+	}
+
+	if req.CustomProxy != nil {
+		proxyVal := strings.TrimSpace(*req.CustomProxy)
+		_ = os.Setenv("HTTP_PROXY", proxyVal)
+		_ = os.Setenv("HTTPS_PROXY", proxyVal)
+		_ = os.Setenv("http_proxy", proxyVal)
+		_ = os.Setenv("https_proxy", proxyVal)
+		if db != nil {
+			_ = db.SaveSetting("custom_proxy", proxyVal)
+		}
+	}
+
+	h.GetConfig(c)
+}
+
+func (h *AdminHandler) TestBangumiEndpoint(c *gin.Context) {
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.URL) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "URL 不能为空"})
+		return
+	}
+
+	latency, err := h.bgmClient.TestEndpoint(req.URL)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success":   false,
+			"latencyMs": latency,
+			"error":     err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":   true,
+		"latencyMs": latency,
+		"message":   "镜像源连接正常",
 	})
 }
 

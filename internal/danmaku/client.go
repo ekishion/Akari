@@ -24,6 +24,7 @@ type DanmakuComment struct {
 type Client struct {
 	httpClient *http.Client
 	endpoint   string
+	endpointMu sync.RWMutex
 	cacheMu    sync.RWMutex
 	cache      map[string]cacheItem
 }
@@ -34,6 +35,8 @@ type cacheItem struct {
 }
 
 func NewClient(endpoint string) *Client {
+	endpoint = strings.TrimSpace(endpoint)
+	endpoint = strings.TrimRight(endpoint, "/")
 	if endpoint == "" {
 		endpoint = "https://ddplay.retr0.xyz" // 默认高可用免签端点
 	}
@@ -41,9 +44,29 @@ func NewClient(endpoint string) *Client {
 		httpClient: &http.Client{
 			Timeout: 15 * time.Second,
 		},
-		endpoint: strings.TrimRight(endpoint, "/"),
+		endpoint: endpoint,
 		cache:    make(map[string]cacheItem),
 	}
+}
+
+func (c *Client) GetEndpoint() string {
+	c.endpointMu.RLock()
+	defer c.endpointMu.RUnlock()
+	if c.endpoint == "" {
+		return "https://ddplay.retr0.xyz"
+	}
+	return c.endpoint
+}
+
+func (c *Client) SetEndpoint(endpoint string) {
+	c.endpointMu.Lock()
+	defer c.endpointMu.Unlock()
+	endpoint = strings.TrimSpace(endpoint)
+	endpoint = strings.TrimRight(endpoint, "/")
+	if endpoint == "" {
+		endpoint = "https://ddplay.retr0.xyz"
+	}
+	c.endpoint = endpoint
 }
 
 func (c *Client) getCached(key string) ([]DanmakuComment, bool) {
@@ -82,7 +105,7 @@ func (c *Client) GetCommentsByBgmId(ctx context.Context, bgmSubjectId, epIndex i
 	}
 
 	// 2. Query DanDan bangumi info by bgm id: /api/v2/bangumi/bgmtv/{id}
-	reqUrl := fmt.Sprintf("%s/api/v2/bangumi/bgmtv/%d", c.endpoint, bgmSubjectId)
+	reqUrl := fmt.Sprintf("%s/api/v2/bangumi/bgmtv/%d", c.GetEndpoint(), bgmSubjectId)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqUrl, nil)
 	if err == nil {
 		req.Header.Set("User-Agent", "akari-bridge/1.0")
@@ -112,7 +135,7 @@ func (c *Client) SearchAndGetComments(ctx context.Context, title string, epIndex
 	}
 
 	cleanTitle := cleanAnimeTitle(title)
-	reqUrl := fmt.Sprintf("%s/api/v2/search/episodes?anime=%s&v2=true", c.endpoint, url.QueryEscape(cleanTitle))
+	reqUrl := fmt.Sprintf("%s/api/v2/search/episodes?anime=%s&v2=true", c.GetEndpoint(), url.QueryEscape(cleanTitle))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqUrl, nil)
 	if err != nil {
 		return nil, err
@@ -154,7 +177,7 @@ func (c *Client) SearchAndGetComments(ctx context.Context, title string, epIndex
 
 // GetCommentsByEpisodeId retrieves raw comments for an episode ID
 func (c *Client) GetCommentsByEpisodeId(ctx context.Context, episodeId string) ([]DanmakuComment, error) {
-	reqUrl := fmt.Sprintf("%s/api/v2/comment/%s?withRelated=true&chConvert=1", c.endpoint, episodeId)
+	reqUrl := fmt.Sprintf("%s/api/v2/comment/%s?withRelated=true&chConvert=1", c.GetEndpoint(), episodeId)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqUrl, nil)
 	if err != nil {
 		return nil, err

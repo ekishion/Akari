@@ -71,6 +71,17 @@ func OpenDB(cfg *config.Config) (*DB, error) {
 
 	s.migrateFromJSON()
 
+	// Load persisted system settings
+	if bgmHost, err := s.GetSetting("bangumi_host"); err == nil && bgmHost != "" {
+		cfg.BangumiHost = bgmHost
+	}
+	if danHost, err := s.GetSetting("dandan_host"); err == nil && danHost != "" {
+		cfg.DanDanHost = danHost
+	}
+	if srvName, err := s.GetSetting("server_name"); err == nil && srvName != "" {
+		cfg.ServerName = srvName
+	}
+
 	log.Printf("[DB] SQLite database initialized at %s", dbPath)
 	return s, nil
 }
@@ -745,5 +756,55 @@ func (s *DB) GetStats() (*SystemStats, error) {
 	}
 
 	return stats, nil
+}
+
+func (s *DB) GetSetting(key string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var val string
+	err := s.db.QueryRow(`SELECT value FROM system_settings WHERE key = ?`, key).Scan(&val)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	return val, nil
+}
+
+func (s *DB) SaveSetting(key, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `
+	INSERT INTO system_settings (key, value, updated_at)
+	VALUES (?, ?, ?)
+	ON CONFLICT(key) DO UPDATE SET
+		value = excluded.value,
+		updated_at = excluded.updated_at
+	`
+	_, err := s.db.Exec(query, key, value, time.Now())
+	return err
+}
+
+func (s *DB) GetAllSettings() (map[string]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(`SELECT key, value FROM system_settings`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	res := make(map[string]string)
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err == nil {
+			res[k] = v
+		}
+	}
+	return res, nil
 }
 

@@ -35,3 +35,29 @@ func TestConcurrentBangumi(t *testing.T) {
 	wg.Wait()
 	t.Logf("Total time: %v", time.Since(start))
 }
+
+func TestBaseUrlAndMirror(t *testing.T) {
+	client := NewClient("https://mirror.bgm.rin.cat/")
+	if client.GetBaseUrl() != "https://mirror.bgm.rin.cat" {
+		t.Fatalf("expected https://mirror.bgm.rin.cat, got %s", client.GetBaseUrl())
+	}
+
+	client.SetBaseUrl("https://chii.ai/")
+	if client.GetBaseUrl() != "https://chii.ai" {
+		t.Fatalf("expected https://chii.ai, got %s", client.GetBaseUrl())
+	}
+
+	client.SetBaseUrl("")
+	if client.GetBaseUrl() != "https://api.bgm.tv" {
+		t.Fatalf("expected default https://api.bgm.tv, got %s", client.GetBaseUrl())
+	}
+}
+
+func TestInvalidEndpoint(t *testing.T) {
+	client := NewClient("")
+	_, err := client.TestEndpoint("invalid-schema://bad")
+	if err == nil {
+		t.Fatalf("expected error for invalid url schema")
+	}
+}
+

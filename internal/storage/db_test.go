@@ -149,3 +149,64 @@ func TestDB_FavoritePersistenceOnRestart(t *testing.T) {
 		t.Errorf("expected 0 watching subjects after unmark, got %v", watchingSubsAfter)
 	}
 }
+
+func TestDB_SettingsPersistence(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg1 := &config.Config{
+		DataDir:     tempDir,
+		BangumiHost: "https://api.bgm.tv",
+		DanDanHost:  "https://api.dandanplay.net",
+		ServerName:  "Akari Default",
+	}
+
+	db1, err := OpenDB(cfg1)
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+
+	if err := db1.SaveSetting("bangumi_host", "https://mirror.bgm.rin.cat"); err != nil {
+		t.Fatalf("SaveSetting failed: %v", err)
+	}
+	if err := db1.SaveSetting("dandan_host", "https://ddplay.retr0.xyz"); err != nil {
+		t.Fatalf("SaveSetting failed: %v", err)
+	}
+	if err := db1.SaveSetting("server_name", "My Custom Akari"); err != nil {
+		t.Fatalf("SaveSetting failed: %v", err)
+	}
+
+	val, err := db1.GetSetting("bangumi_host")
+	if err != nil || val != "https://mirror.bgm.rin.cat" {
+		t.Fatalf("unexpected GetSetting bangumi_host: %s, err: %v", val, err)
+	}
+
+	all, err := db1.GetAllSettings()
+	if err != nil || len(all) < 3 {
+		t.Fatalf("unexpected GetAllSettings: %+v", all)
+	}
+
+	_ = db1.Close()
+
+	// Reopen with defaults, should load persisted settings automatically
+	cfg2 := &config.Config{
+		DataDir:     tempDir,
+		BangumiHost: "https://api.bgm.tv",
+		DanDanHost:  "https://api.dandanplay.net",
+		ServerName:  "Akari Default",
+	}
+	db2, err := OpenDB(cfg2)
+	if err != nil {
+		t.Fatalf("Second OpenDB failed: %v", err)
+	}
+	defer db2.Close()
+
+	if cfg2.BangumiHost != "https://mirror.bgm.rin.cat" {
+		t.Errorf("expected BangumiHost to persist, got %s", cfg2.BangumiHost)
+	}
+	if cfg2.DanDanHost != "https://ddplay.retr0.xyz" {
+		t.Errorf("expected DanDanHost to persist, got %s", cfg2.DanDanHost)
+	}
+	if cfg2.ServerName != "My Custom Akari" {
+		t.Errorf("expected ServerName to persist, got %s", cfg2.ServerName)
+	}
+}
+

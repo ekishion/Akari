@@ -1,4 +1,4 @@
-import type { SystemStatus, SystemConfig, UserView, UserToken, RulePlugin, PlaybackHistory, TestResult } from './types'
+import type { SystemStatus, SystemConfig, UserView, UserToken, RulePlugin, PlaybackHistory, TestResult, MirrorTestResult } from './types'
 
 const BASE_URL = ''
 
@@ -42,6 +42,16 @@ export const api = {
   // System
   getStatus: () => request<SystemStatus>('/api/system/status'),
   getConfig: () => request<SystemConfig>('/api/system/config'),
+  updateConfig: (data: Partial<SystemConfig>) =>
+    request<SystemConfig>('/api/system/config', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  testBangumiMirror: (url: string) =>
+    request<MirrorTestResult>('/api/system/bangumi/test', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }),
   cleanCache: () => request<{ status: string; message: string }>('/api/system/clean-cache', { method: 'POST' }),
 
   // Auth

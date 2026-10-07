@@ -80,7 +80,10 @@ func SetupRouter(
 		// System
 		apiGroup.GET("/system/status", adminHandler.GetStatus)
 		apiGroup.GET("/system/config", adminHandler.GetConfig)
+		apiGroup.POST("/system/config", adminHandler.UpdateConfig)
+		apiGroup.PUT("/system/config", adminHandler.UpdateConfig)
 		apiGroup.POST("/system/clean-cache", adminHandler.CleanCache)
+		apiGroup.POST("/system/bangumi/test", adminHandler.TestBangumiEndpoint)
 
 		// Users
 		apiGroup.GET("/users", adminHandler.ListUsers)

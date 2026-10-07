@@ -103,3 +103,11 @@ export interface TestResult {
   }>
   chapterError?: string
 }
+
+export interface MirrorTestResult {
+  success: boolean
+  latencyMs?: number
+  error?: string
+  message?: string
+}
+

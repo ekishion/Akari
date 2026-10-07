@@ -129,4 +129,42 @@ func TestAdminRouter_Integration(t *testing.T) {
 	if unfavRes.IsFavorite {
 		t.Errorf("expected IsFavorite=false, got true")
 	}
+
+	// 7. Test /api/system/config PUT / POST (Mirror Update)
+	updatePayload := `{"bangumiHost": "https://mirror.bgm.rin.cat", "dandanHost": "https://ddplay.retr0.xyz", "serverName": "Akari Rebranded"}`
+	reqUpd := httptest.NewRequest(http.MethodPost, "/api/system/config", strings.NewReader(updatePayload))
+	reqUpd.Header.Set("Content-Type", "application/json")
+	wUpd := httptest.NewRecorder()
+	router.ServeHTTP(wUpd, reqUpd)
+	if wUpd.Code != http.StatusOK {
+		t.Fatalf("expected 200 for POST /api/system/config, got %d: %s", wUpd.Code, wUpd.Body.String())
+	}
+
+	var updRes map[string]any
+	_ = json.Unmarshal(wUpd.Body.Bytes(), &updRes)
+	if updRes["bangumiHost"] != "https://mirror.bgm.rin.cat" {
+		t.Errorf("expected updated bangumiHost https://mirror.bgm.rin.cat, got %v", updRes["bangumiHost"])
+	}
+	if updRes["serverName"] != "Akari Rebranded" {
+		t.Errorf("expected updated serverName Akari Rebranded, got %v", updRes["serverName"])
+	}
+	if bgmClient.GetBaseUrl() != "https://mirror.bgm.rin.cat" {
+		t.Errorf("expected bgmClient to update base url to https://mirror.bgm.rin.cat, got %s", bgmClient.GetBaseUrl())
+	}
+
+	// 8. Test /api/system/bangumi/test
+	testPayload := `{"url": "invalid-url://example.com"}`
+	reqTest := httptest.NewRequest(http.MethodPost, "/api/system/bangumi/test", strings.NewReader(testPayload))
+	reqTest.Header.Set("Content-Type", "application/json")
+	wTest := httptest.NewRecorder()
+	router.ServeHTTP(wTest, reqTest)
+	if wTest.Code != http.StatusOK {
+		t.Fatalf("expected 200 for POST /api/system/bangumi/test, got %d", wTest.Code)
+	}
+	var testRes map[string]any
+	_ = json.Unmarshal(wTest.Body.Bytes(), &testRes)
+	if testRes["success"] == true {
+		t.Errorf("expected failure for invalid url")
+	}
 }
+

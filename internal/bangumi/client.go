@@ -7,12 +7,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
 
 type Client struct {
 	baseUrl    string
+	baseMu     sync.RWMutex
 	httpClient *http.Client
 	cacheMu    sync.RWMutex
 	cache      map[string]cacheItem
@@ -111,6 +113,8 @@ func (e *BangumiEpisode) UnmarshalJSON(data []byte) error {
 }
 
 func NewClient(baseUrl string) *Client {
+	baseUrl = strings.TrimSpace(baseUrl)
+	baseUrl = strings.TrimRight(baseUrl, "/")
 	if baseUrl == "" {
 		baseUrl = "https://api.bgm.tv"
 	}
@@ -122,6 +126,64 @@ func NewClient(baseUrl string) *Client {
 		cache:    make(map[string]cacheItem),
 		imageMap: make(map[int]string),
 	}
+}
+
+func (c *Client) GetBaseUrl() string {
+	c.baseMu.RLock()
+	defer c.baseMu.RUnlock()
+	if c.baseUrl == "" {
+		return "https://api.bgm.tv"
+	}
+	return c.baseUrl
+}
+
+func (c *Client) SetBaseUrl(baseUrl string) {
+	c.baseMu.Lock()
+	defer c.baseMu.Unlock()
+	baseUrl = strings.TrimSpace(baseUrl)
+	baseUrl = strings.TrimRight(baseUrl, "/")
+	if baseUrl == "" {
+		baseUrl = "https://api.bgm.tv"
+	}
+	c.baseUrl = baseUrl
+}
+
+// TestEndpoint checks if the given Bangumi endpoint (or mirror) is accessible and measures roundtrip latency.
+func (c *Client) TestEndpoint(targetUrl string) (int64, error) {
+	targetUrl = strings.TrimSpace(targetUrl)
+	targetUrl = strings.TrimRight(targetUrl, "/")
+	if targetUrl == "" {
+		targetUrl = "https://api.bgm.tv"
+	}
+	if !strings.HasPrefix(targetUrl, "http://") && !strings.HasPrefix(targetUrl, "https://") {
+		return 0, fmt.Errorf("URL 必须以 http:// 或 https:// 开头")
+	}
+
+	testClient := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	testUrl := fmt.Sprintf("%s/calendar", targetUrl)
+	req, err := http.NewRequest(http.MethodGet, testUrl, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("User-Agent", BangumiUserAgent)
+	req.Header.Set("Accept", "application/json")
+
+	start := time.Now()
+	resp, err := testClient.Do(req)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		return latency, fmt.Errorf("连接超时或失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return latency, fmt.Errorf("返回状态码异常: %d", resp.StatusCode)
+	}
+
+	return latency, nil
 }
 
 func (c *Client) getCached(key string) (any, bool) {
@@ -169,42 +231,46 @@ func (c *Client) GetCalendar() ([]BangumiSubject, error) {
 		return cached.([]BangumiSubject), nil
 	}
 
-	// 1. Try next.bgm.tv/p1/calendar
-	reqUrl := "https://next.bgm.tv/p1/calendar"
-	req, err := http.NewRequest(http.MethodGet, reqUrl, nil)
-	if err == nil {
-		req.Header.Set("User-Agent", BangumiUserAgent)
-		req.Header.Set("Accept", "application/json")
-		resp, err := c.httpClient.Do(req)
-		if err == nil && resp.StatusCode == http.StatusOK {
-			defer resp.Body.Close()
-			body, _ := io.ReadAll(resp.Body)
-			var rawCalendar map[string][]struct {
-				Subject BangumiSubject `json:"subject"`
-			}
-			if err := json.Unmarshal(body, &rawCalendar); err == nil && len(rawCalendar) > 0 {
-				var result []BangumiSubject
-				for day := 1; day <= 7; day++ {
-					key := fmt.Sprintf("%d", day)
-					if list, exists := rawCalendar[key]; exists {
-						for _, item := range list {
-							sub := item.Subject
-							sub.AirWeekday = day
-							result = append(result, sub)
+	baseUrl := c.GetBaseUrl()
+
+	// 1. If using default official api.bgm.tv, try next.bgm.tv first
+	if baseUrl == "https://api.bgm.tv" {
+		reqUrl := "https://next.bgm.tv/p1/calendar"
+		req, err := http.NewRequest(http.MethodGet, reqUrl, nil)
+		if err == nil {
+			req.Header.Set("User-Agent", BangumiUserAgent)
+			req.Header.Set("Accept", "application/json")
+			resp, err := c.httpClient.Do(req)
+			if err == nil && resp.StatusCode == http.StatusOK {
+				defer resp.Body.Close()
+				body, _ := io.ReadAll(resp.Body)
+				var rawCalendar map[string][]struct {
+					Subject BangumiSubject `json:"subject"`
+				}
+				if err := json.Unmarshal(body, &rawCalendar); err == nil && len(rawCalendar) > 0 {
+					var result []BangumiSubject
+					for day := 1; day <= 7; day++ {
+						key := fmt.Sprintf("%d", day)
+						if list, exists := rawCalendar[key]; exists {
+							for _, item := range list {
+								sub := item.Subject
+								sub.AirWeekday = day
+								result = append(result, sub)
+							}
 						}
 					}
-				}
-				if len(result) > 0 {
-					c.cacheImages(result)
-					c.setCache(cacheKey, result, 2*time.Hour)
-					return result, nil
+					if len(result) > 0 {
+						c.cacheImages(result)
+						c.setCache(cacheKey, result, 2*time.Hour)
+						return result, nil
+					}
 				}
 			}
 		}
 	}
 
-	// 2. Fallback to api.bgm.tv/calendar
-	fallbackUrl := fmt.Sprintf("%s/calendar", c.baseUrl)
+	// 2. Query {baseUrl}/calendar (supported by official API and mirrors)
+	fallbackUrl := fmt.Sprintf("%s/calendar", baseUrl)
 	req2, err2 := http.NewRequest(http.MethodGet, fallbackUrl, nil)
 	if err2 == nil {
 		req2.Header.Set("User-Agent", BangumiUserAgent)
@@ -246,29 +312,33 @@ func (c *Client) GetTrending(limit, offset int) ([]BangumiSubject, error) {
 		return cached.([]BangumiSubject), nil
 	}
 
-	// 1. Try next.bgm.tv
-	reqUrl := fmt.Sprintf("https://next.bgm.tv/p1/trending/subjects?type=2&limit=%d&offset=%d", limit, offset)
-	req, err := http.NewRequest(http.MethodGet, reqUrl, nil)
-	if err == nil {
-		req.Header.Set("User-Agent", BangumiUserAgent)
-		req.Header.Set("Accept", "application/json")
-		resp, err := c.httpClient.Do(req)
-		if err == nil && resp.StatusCode == http.StatusOK {
-			defer resp.Body.Close()
-			body, _ := io.ReadAll(resp.Body)
-			var raw struct {
-				Data []struct {
-					Subject BangumiSubject `json:"subject"`
-				} `json:"data"`
-			}
-			if err := json.Unmarshal(body, &raw); err == nil && len(raw.Data) > 0 {
-				result := make([]BangumiSubject, 0, len(raw.Data))
-				for _, item := range raw.Data {
-					result = append(result, item.Subject)
+	baseUrl := c.GetBaseUrl()
+
+	// 1. Try next.bgm.tv if on official domain
+	if baseUrl == "https://api.bgm.tv" {
+		reqUrl := fmt.Sprintf("https://next.bgm.tv/p1/trending/subjects?type=2&limit=%d&offset=%d", limit, offset)
+		req, err := http.NewRequest(http.MethodGet, reqUrl, nil)
+		if err == nil {
+			req.Header.Set("User-Agent", BangumiUserAgent)
+			req.Header.Set("Accept", "application/json")
+			resp, err := c.httpClient.Do(req)
+			if err == nil && resp.StatusCode == http.StatusOK {
+				defer resp.Body.Close()
+				body, _ := io.ReadAll(resp.Body)
+				var raw struct {
+					Data []struct {
+						Subject BangumiSubject `json:"subject"`
+					} `json:"data"`
 				}
-				c.cacheImages(result)
-				c.setCache(cacheKey, result, 1*time.Hour)
-				return result, nil
+				if err := json.Unmarshal(body, &raw); err == nil && len(raw.Data) > 0 {
+					result := make([]BangumiSubject, 0, len(raw.Data))
+					for _, item := range raw.Data {
+						result = append(result, item.Subject)
+					}
+					c.cacheImages(result)
+					c.setCache(cacheKey, result, 1*time.Hour)
+					return result, nil
+				}
 			}
 		}
 	}
@@ -281,6 +351,16 @@ func (c *Client) GetTrending(limit, offset int) ([]BangumiSubject, error) {
 		return fallbackSubjects, nil
 	}
 
+	// 3. Fallback to calendar if search is empty
+	cal, err := c.GetCalendar()
+	if err == nil && len(cal) > 0 {
+		if len(cal) > limit {
+			cal = cal[:limit]
+		}
+		c.setCache(cacheKey, cal, 1*time.Hour)
+		return cal, nil
+	}
+
 	return nil, fmt.Errorf("all trending endpoints failed")
 }
 
@@ -291,7 +371,7 @@ func (c *Client) GetSubject(subjectId int) (*BangumiSubject, error) {
 		return cached.(*BangumiSubject), nil
 	}
 
-	reqUrl := fmt.Sprintf("%s/v0/subjects/%d", c.baseUrl, subjectId)
+	reqUrl := fmt.Sprintf("%s/v0/subjects/%d", c.GetBaseUrl(), subjectId)
 	req, err := http.NewRequest(http.MethodGet, reqUrl, nil)
 	if err != nil {
 		return nil, err
@@ -335,7 +415,7 @@ func (c *Client) GetEpisodes(subjectId int) ([]BangumiEpisode, error) {
 	offset := 0
 
 	for {
-		reqUrl := fmt.Sprintf("%s/v0/episodes?subject_id=%d&limit=%d&offset=%d", c.baseUrl, subjectId, limit, offset)
+		reqUrl := fmt.Sprintf("%s/v0/episodes?subject_id=%d&limit=%d&offset=%d", c.GetBaseUrl(), subjectId, limit, offset)
 		req, err := http.NewRequest(http.MethodGet, reqUrl, nil)
 		if err != nil {
 			return nil, err
@@ -384,7 +464,7 @@ func (c *Client) GetEpisode(epId int) (*BangumiEpisode, int, error) {
 		return item.Ep, item.SubjectId, nil
 	}
 
-	reqUrl := fmt.Sprintf("%s/v0/episodes/%d", c.baseUrl, epId)
+	reqUrl := fmt.Sprintf("%s/v0/episodes/%d", c.GetBaseUrl(), epId)
 	req, err := http.NewRequest(http.MethodGet, reqUrl, nil)
 	if err != nil {
 		return nil, 0, err
@@ -422,7 +502,7 @@ func (c *Client) Search(keyword string, limit int) ([]BangumiSubject, error) {
 	}
 
 	bodyBytes, _ := json.Marshal(searchPayload)
-	reqUrl := fmt.Sprintf("%s/v0/search/subjects?limit=%d&offset=0", c.baseUrl, limit)
+	reqUrl := fmt.Sprintf("%s/v0/search/subjects?limit=%d&offset=0", c.GetBaseUrl(), limit)
 	req, err := http.NewRequest(http.MethodPost, reqUrl, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
@@ -488,7 +568,7 @@ func (c *Client) GetMe(accessToken string) (*BangumiUserProfile, error) {
 		return nil, fmt.Errorf("access token is empty")
 	}
 
-	reqUrl := fmt.Sprintf("%s/v0/me", c.baseUrl)
+	reqUrl := fmt.Sprintf("%s/v0/me", c.GetBaseUrl())
 	req, err := http.NewRequest(http.MethodGet, reqUrl, nil)
 	if err != nil {
 		return nil, err
@@ -529,7 +609,7 @@ func (c *Client) GetUserCollections(usernameOrId string, accessToken string, col
 		return cached.([]BangumiSubject), nil
 	}
 
-	reqUrl := fmt.Sprintf("%s/v0/users/%s/collections?subject_type=2&type=%d&limit=%d&offset=%d", c.baseUrl, url.PathEscape(usernameOrId), collectionType, limit, offset)
+	reqUrl := fmt.Sprintf("%s/v0/users/%s/collections?subject_type=2&type=%d&limit=%d&offset=%d", c.GetBaseUrl(), url.PathEscape(usernameOrId), collectionType, limit, offset)
 	req, err := http.NewRequest(http.MethodGet, reqUrl, nil)
 	if err != nil {
 		return nil, err
