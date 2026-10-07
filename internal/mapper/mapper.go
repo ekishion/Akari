@@ -145,7 +145,7 @@ func IsEpisodeAired(ep *bangumi.BangumiEpisode, sub *bangumi.BangumiSubject) boo
 	return epIndex <= 1
 }
 
-// CreateVirtualViews returns the default library roots as CollectionFolder for /Users/:id/Views
+// CreateVirtualViews returns the default library roots as UserView for /Users/:id/Views and /UserViews
 func CreateVirtualViews(serverId string) []model.BaseItemDto {
 	return []model.BaseItemDto{
 		{
@@ -153,7 +153,7 @@ func CreateVirtualViews(serverId string) []model.BaseItemDto {
 			Id:                       ViewIdSchedule,
 			Guid:                     ViewIdSchedule,
 			ServerId:                 serverId,
-			Type:                     "CollectionFolder",
+			Type:                     "UserView",
 			CollectionType:           "tvshows",
 			LocationType:             "FileSystem",
 			Path:                     "/media/每日放送",
@@ -182,7 +182,7 @@ func CreateVirtualViews(serverId string) []model.BaseItemDto {
 			Id:                       ViewIdTrending,
 			Guid:                     ViewIdTrending,
 			ServerId:                 serverId,
-			Type:                     "CollectionFolder",
+			Type:                     "UserView",
 			CollectionType:           "tvshows",
 			LocationType:             "FileSystem",
 			Path:                     "/media/热门排行",
@@ -211,7 +211,7 @@ func CreateVirtualViews(serverId string) []model.BaseItemDto {
 			Id:                       ViewIdWatching,
 			Guid:                     ViewIdWatching,
 			ServerId:                 serverId,
-			Type:                     "CollectionFolder",
+			Type:                     "UserView",
 			CollectionType:           "tvshows",
 			LocationType:             "FileSystem",
 			Path:                     "/media/正在追番",

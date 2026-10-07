@@ -177,6 +177,9 @@ func SetupRouter(
 		{
 			authed.GET("/Users/:id", usersHandler.GetUser)
 			authed.GET("/Users/:id/Views", viewsHandler.GetUserViews)
+			authed.GET("/Users/:id/UserViews", viewsHandler.GetUserViews)
+			authed.GET("/UserViews", viewsHandler.GetUserViews)
+			authed.GET("/Views", viewsHandler.GetUserViews)
 			authed.GET("/Users/:id/GroupingOptions", viewsHandler.GetGroupingOptions)
 			authed.GET("/Users/:id/Items/Root", viewsHandler.GetRootFolder)
 			authed.GET("/Users/:id/Items", itemsHandler.GetUserItems)
@@ -184,6 +187,7 @@ func SetupRouter(
 			authed.GET("/Users/:id/Items/Resume", itemsHandler.GetResumeItems)
 			authed.GET("/Users/:id/Items/:itemId", itemsHandler.GetItem)
 			authed.GET("/Users/:id/Items/:itemId/UserData", usersHandler.GetCurrentItemUserData)
+			authed.GET("/Users/:id/Shows/NextUp", itemsHandler.GetNextUp)
 			authed.POST("/Users/:id/PlayedItems/:itemId", usersHandler.MarkPlayedItem)
 			authed.DELETE("/Users/:id/PlayedItems/:itemId", usersHandler.UnmarkPlayedItem)
 			authed.POST("/Users/:id/FavoriteItems/:itemId", usersHandler.MarkFavoriteItem)
@@ -201,6 +205,7 @@ func SetupRouter(
 			authed.GET("/Shows/:id/Seasons", itemsHandler.GetSeasons)
 			authed.GET("/Shows/:id/Episodes", itemsHandler.GetEpisodes)
 			authed.GET("/Shows/NextUp", itemsHandler.GetNextUp)
+			authed.GET("/Shows/NextUp/Episodes", itemsHandler.GetNextUp)
 
 			// Playback & Sessions
 			authed.POST("/Items/:id/PlaybackInfo", playbackHandler.GetPlaybackInfo)

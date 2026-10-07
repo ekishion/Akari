@@ -238,8 +238,12 @@ func (h *ItemsHandler) GetUserItems(c *gin.Context) {
 			}
 		}
 	} else {
-		switch parentId {
-		case mapper.ViewIdSchedule:
+		switch strings.ToLower(parentId) {
+		case "root", "0":
+			views := mapper.CreateVirtualViews(h.cfg.ServerId)
+			c.JSON(http.StatusOK, model.NewQueryResult(views))
+			return
+		case mapper.ViewIdSchedule, "schedule":
 			subjects, err := h.bangumiClient.GetCalendar()
 			if err == nil {
 				for _, sub := range subjects {
@@ -250,22 +254,7 @@ func (h *ItemsHandler) GetUserItems(c *gin.Context) {
 					items = append(items, item)
 				}
 			}
-		case mapper.ViewIdTrending, "":
-			fetchLimit := limit + startIndex
-			if fetchLimit < 30 {
-				fetchLimit = 30
-			}
-			subjects, err := h.bangumiClient.GetTrending(fetchLimit, 0)
-			if err == nil {
-				for _, sub := range subjects {
-					item := mapper.SubjectToSeries(&sub, h.cfg.ServerId)
-					if h.db != nil {
-						item.UserData = h.db.GetUserItemData(userId, item.Id)
-					}
-					items = append(items, item)
-				}
-			}
-		case mapper.ViewIdWatching:
+		case mapper.ViewIdWatching, "watching":
 			var userSubjects []bangumi.BangumiSubject
 			seenSubject := make(map[int]bool)
 
@@ -307,6 +296,41 @@ func (h *ItemsHandler) GetUserItems(c *gin.Context) {
 					item.UserData = h.db.GetUserItemData(userId, item.Id)
 				}
 				items = append(items, item)
+			}
+		case mapper.ViewIdTrending, "trending", "":
+			if parentId == "" && c.Query("Recursive") != "true" && (includeItemTypes == "" || strings.Contains(includeItemTypes, "UserView") || strings.Contains(includeItemTypes, "Folder")) {
+				views := mapper.CreateVirtualViews(h.cfg.ServerId)
+				c.JSON(http.StatusOK, model.NewQueryResult(views))
+				return
+			}
+			fetchLimit := limit + startIndex
+			if fetchLimit < 30 {
+				fetchLimit = 30
+			}
+			subjects, err := h.bangumiClient.GetTrending(fetchLimit, 0)
+			if err == nil {
+				for _, sub := range subjects {
+					item := mapper.SubjectToSeries(&sub, h.cfg.ServerId)
+					if h.db != nil {
+						item.UserData = h.db.GetUserItemData(userId, item.Id)
+					}
+					items = append(items, item)
+				}
+			}
+		default:
+			fetchLimit := limit + startIndex
+			if fetchLimit < 30 {
+				fetchLimit = 30
+			}
+			subjects, err := h.bangumiClient.GetTrending(fetchLimit, 0)
+			if err == nil {
+				for _, sub := range subjects {
+					item := mapper.SubjectToSeries(&sub, h.cfg.ServerId)
+					if h.db != nil {
+						item.UserData = h.db.GetUserItemData(userId, item.Id)
+					}
+					items = append(items, item)
+				}
 			}
 		}
 	}
@@ -656,8 +680,8 @@ func (h *ItemsHandler) GetLatestItems(c *gin.Context) {
 
 	items := make([]model.BaseItemDto, 0)
 
-	switch parentId {
-	case mapper.ViewIdSchedule:
+	switch strings.ToLower(parentId) {
+	case mapper.ViewIdSchedule, "schedule":
 		subjects, err := h.bangumiClient.GetCalendar()
 		if err == nil {
 			for _, sub := range subjects {
@@ -668,7 +692,7 @@ func (h *ItemsHandler) GetLatestItems(c *gin.Context) {
 				items = append(items, item)
 			}
 		}
-	case mapper.ViewIdWatching:
+	case mapper.ViewIdWatching, "watching":
 		var userSubjects []bangumi.BangumiSubject
 		seenSubject := make(map[int]bool)
 
@@ -709,7 +733,7 @@ func (h *ItemsHandler) GetLatestItems(c *gin.Context) {
 			}
 			items = append(items, item)
 		}
-	case mapper.ViewIdTrending, "":
+	case mapper.ViewIdTrending, "trending", "":
 		fallthrough
 	default:
 		fetchLimit := limit
