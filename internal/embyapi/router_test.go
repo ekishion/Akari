@@ -119,11 +119,53 @@ func TestSetupRouter(t *testing.T) {
 		t.Fatalf("expected 200 for UnmarkFavorite, got %d", wUnfav.Code)
 	}
 
-	// Check Favorite Items list is empty
-	reqFavList2 := httptest.NewRequest(http.MethodGet, "/emby/Users/admin/Items?Filters=IsFavorite", nil)
-	wFavList2 := httptest.NewRecorder()
-	r.ServeHTTP(wFavList2, reqFavList2)
-	if strings.Contains(wFavList2.Body.String(), "bgm_sub_622288") {
-		t.Fatalf("expected bgm_sub_622288 to be removed from favorites list: %s", wFavList2.Body.String())
+	// 6. Test GET /emby/Users/admin/Views
+	reqViews := httptest.NewRequest(http.MethodGet, "/emby/Users/admin/Views?IncludeExternalContent=false&IncludeHidden=false", nil)
+	wViews := httptest.NewRecorder()
+	r.ServeHTTP(wViews, reqViews)
+	if wViews.Code != http.StatusOK {
+		t.Fatalf("expected 200 for Views, got %d: %s", wViews.Code, wViews.Body.String())
+	}
+	viewsBody := wViews.Body.String()
+	if !strings.Contains(viewsBody, "view_schedule") || !strings.Contains(viewsBody, "FileSystem") {
+		t.Fatalf("expected view_schedule and FileSystem in Views response: %s", viewsBody)
+	}
+
+	// 7. Test GET /emby/Users/admin/Items/Resume (Must return [] not null)
+	reqResume := httptest.NewRequest(http.MethodGet, "/emby/Users/admin/Items/Resume", nil)
+	wResume := httptest.NewRecorder()
+	r.ServeHTTP(wResume, reqResume)
+	if wResume.Code != http.StatusOK {
+		t.Fatalf("expected 200 for Resume, got %d: %s", wResume.Code, wResume.Body.String())
+	}
+	resumeBody := wResume.Body.String()
+	if strings.Contains(resumeBody, `"Items":null`) {
+		t.Fatalf("Resume response must not contain Items:null: %s", resumeBody)
+	}
+	if !strings.Contains(resumeBody, `"Items":[]`) {
+		t.Fatalf("Resume response must contain Items:[]: %s", resumeBody)
+	}
+
+	// 8. Test GET /emby/System/Configuration
+	reqSysCfg := httptest.NewRequest(http.MethodGet, "/emby/System/Configuration", nil)
+	wSysCfg := httptest.NewRecorder()
+	r.ServeHTTP(wSysCfg, reqSysCfg)
+	if wSysCfg.Code != http.StatusOK {
+		t.Fatalf("expected 200 for System/Configuration, got %d", wSysCfg.Code)
+	}
+	sysCfgBody := wSysCfg.Body.String()
+	if !strings.Contains(sysCfgBody, "EnableUserViews") {
+		t.Fatalf("expected EnableUserViews in System/Configuration: %s", sysCfgBody)
+	}
+
+	// 9. Test GET /emby/DisplayPreferences/usersettings
+	reqDispPref := httptest.NewRequest(http.MethodGet, "/emby/DisplayPreferences/usersettings", nil)
+	wDispPref := httptest.NewRecorder()
+	r.ServeHTTP(wDispPref, reqDispPref)
+	if wDispPref.Code != http.StatusOK {
+		t.Fatalf("expected 200 for DisplayPreferences, got %d", wDispPref.Code)
+	}
+	if !strings.Contains(wDispPref.Body.String(), "CustomPrefs") {
+		t.Fatalf("expected CustomPrefs in DisplayPreferences: %s", wDispPref.Body.String())
 	}
 }

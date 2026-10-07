@@ -147,6 +147,11 @@ type BaseItemDto struct {
 	CanResume               bool              `json:"CanResume"`
 	IsPlaceHolder           bool              `json:"IsPlaceHolder"`
 	IsFolder                bool              `json:"IsFolder"`
+	LocationType            string            `json:"LocationType,omitempty"` // FileSystem, Virtual
+	Guid                    string            `json:"Guid,omitempty"`
+	PresentationUniqueKey   string            `json:"PresentationUniqueKey,omitempty"`
+	EnableMediaSourceDisplay bool             `json:"EnableMediaSourceDisplay,omitempty"`
+	SortIndexNumber         int               `json:"SortIndexNumber,omitempty"`
 	CanDownload             bool              `json:"CanDownload"`
 	SupportsSync            bool              `json:"SupportsSync"`
 }
@@ -167,6 +172,16 @@ type UserItemDataDto struct {
 type QueryResult[T any] struct {
 	Items            []T `json:"Items"`
 	TotalRecordCount int `json:"TotalRecordCount"`
+}
+
+func NewQueryResult[T any](items []T) QueryResult[T] {
+	if items == nil {
+		items = make([]T, 0)
+	}
+	return QueryResult[T]{
+		Items:            items,
+		TotalRecordCount: len(items),
+	}
 }
 
 type MediaSourceInfo struct {

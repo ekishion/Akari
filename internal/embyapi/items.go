@@ -163,14 +163,11 @@ func (h *ItemsHandler) GetUserItems(c *gin.Context) {
 
 	// 2. Specific Provider ID probe
 	if c.Query("AnyProviderIdEquals") != "" {
-		c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
-			Items:            []model.BaseItemDto{},
-			TotalRecordCount: 0,
-		})
+		c.JSON(http.StatusOK, model.NewQueryResult([]model.BaseItemDto{}))
 		return
 	}
 
-	var items []model.BaseItemDto
+	items := make([]model.BaseItemDto, 0)
 
 	// 3. If searching
 	if searchTerm != "" {
@@ -309,10 +306,7 @@ func (h *ItemsHandler) GetUserItems(c *gin.Context) {
 		pagedItems = []model.BaseItemDto{}
 	}
 
-	c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
-		Items:            pagedItems,
-		TotalRecordCount: totalCount,
-	})
+	c.JSON(http.StatusOK, model.NewQueryResult(pagedItems))
 }
 
 // GetItemCounts handles GET /emby/Items/Counts
@@ -353,7 +347,7 @@ func (h *ItemsHandler) GetResumeItems(c *gin.Context) {
 		limit = 20
 	}
 
-	var items []model.BaseItemDto
+	items := make([]model.BaseItemDto, 0)
 	if h.db != nil {
 		itemIds := h.db.GetUserResumeItems(userId, limit)
 		for _, id := range itemIds {
@@ -396,26 +390,17 @@ func (h *ItemsHandler) GetResumeItems(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
-		Items:            items,
-		TotalRecordCount: len(items),
-	})
+	c.JSON(http.StatusOK, model.NewQueryResult(items))
 }
 
 // GetStudios handles GET /emby/Studios
 func (h *ItemsHandler) GetStudios(c *gin.Context) {
-	c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
-		Items:            []model.BaseItemDto{},
-		TotalRecordCount: 0,
-	})
+	c.JSON(http.StatusOK, model.NewQueryResult([]model.BaseItemDto{}))
 }
 
 // GetGenres handles GET /emby/Genres
 func (h *ItemsHandler) GetGenres(c *gin.Context) {
-	c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
-		Items:            []model.BaseItemDto{},
-		TotalRecordCount: 0,
-	})
+	c.JSON(http.StatusOK, model.NewQueryResult([]model.BaseItemDto{}))
 }
 
 // GetNextUp handles GET /emby/Shows/NextUp
@@ -426,7 +411,7 @@ func (h *ItemsHandler) GetNextUp(c *gin.Context) {
 	}
 	seriesId := c.Query("SeriesId")
 
-	var items []model.BaseItemDto
+	items := make([]model.BaseItemDto, 0)
 	if seriesId != "" && strings.HasPrefix(seriesId, "bgm_sub_") {
 		subId := mapper.ExtractSubjectId(seriesId)
 		if subId > 0 {
@@ -464,10 +449,7 @@ func (h *ItemsHandler) GetNextUp(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
-		Items:            items,
-		TotalRecordCount: len(items),
-	})
+	c.JSON(http.StatusOK, model.NewQueryResult(items))
 }
 
 // GetItem handles GET /emby/Items/:id and /emby/Users/:id/Items/:itemId
@@ -585,11 +567,7 @@ func (h *ItemsHandler) GetSeasons(c *gin.Context) {
 		season.UserData = h.db.GetUserItemData(userId, season.Id)
 	}
 	items := []model.BaseItemDto{season}
-
-	c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
-		Items:            items,
-		TotalRecordCount: len(items),
-	})
+	c.JSON(http.StatusOK, model.NewQueryResult(items))
 }
 
 // GetEpisodes handles GET /emby/Shows/:id/Episodes
@@ -613,7 +591,7 @@ func (h *ItemsHandler) GetEpisodes(c *gin.Context) {
 		return
 	}
 
-	var items []model.BaseItemDto
+	items := make([]model.BaseItemDto, 0)
 	for _, ep := range episodes {
 		if !mapper.IsEpisodeAired(&ep, sub) {
 			continue
@@ -628,27 +606,21 @@ func (h *ItemsHandler) GetEpisodes(c *gin.Context) {
 		items = append(items, item)
 	}
 
-	c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
-		Items:            items,
-		TotalRecordCount: len(items),
-	})
+	c.JSON(http.StatusOK, model.NewQueryResult(items))
 }
 
 // GetThemeMedia handles GET /emby/Items/:id/ThemeMedia and ThemeSongs
 func (h *ItemsHandler) GetThemeMedia(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"ThemeVideosResult":     model.QueryResult[model.BaseItemDto]{Items: []model.BaseItemDto{}},
-		"ThemeSongsResult":      model.QueryResult[model.BaseItemDto]{Items: []model.BaseItemDto{}},
-		"SoundtrackSongsResult": model.QueryResult[model.BaseItemDto]{Items: []model.BaseItemDto{}},
+		"ThemeVideosResult":     model.NewQueryResult([]model.BaseItemDto{}),
+		"ThemeSongsResult":      model.NewQueryResult([]model.BaseItemDto{}),
+		"SoundtrackSongsResult": model.NewQueryResult([]model.BaseItemDto{}),
 	})
 }
 
 // GetSimilarItems handles GET /emby/Items/:id/Similar
 func (h *ItemsHandler) GetSimilarItems(c *gin.Context) {
-	c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
-		Items:            []model.BaseItemDto{},
-		TotalRecordCount: 0,
-	})
+	c.JSON(http.StatusOK, model.NewQueryResult([]model.BaseItemDto{}))
 }
 
 // GetPrimaryImage handles GET /emby/Items/:id/Images/Primary
@@ -784,45 +756,42 @@ func matchItemType(itemType, includeItemTypes string) bool {
 
 // GetPersons handles GET /emby/Persons and /emby/Persons/:name
 func (h *ItemsHandler) GetPersons(c *gin.Context) {
-	c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
-		Items:            []model.BaseItemDto{},
-		TotalRecordCount: 0,
-	})
+	c.JSON(http.StatusOK, model.NewQueryResult([]model.BaseItemDto{}))
 }
 
 // GetCollections handles GET /emby/Collections
 func (h *ItemsHandler) GetCollections(c *gin.Context) {
-	c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
-		Items:            []model.BaseItemDto{},
-		TotalRecordCount: 0,
-	})
+	c.JSON(http.StatusOK, model.NewQueryResult([]model.BaseItemDto{}))
 }
 
 // GetPlaylists handles GET /emby/Playlists
 func (h *ItemsHandler) GetPlaylists(c *gin.Context) {
-	c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
-		Items:            []model.BaseItemDto{},
-		TotalRecordCount: 0,
-	})
+	c.JSON(http.StatusOK, model.NewQueryResult([]model.BaseItemDto{}))
 }
 
 // GetDisplayPreferences handles GET & POST /emby/DisplayPreferences/:id
 func (h *ItemsHandler) GetDisplayPreferences(c *gin.Context) {
 	id := c.Param("id")
 	c.JSON(http.StatusOK, gin.H{
-		"Id":                 id,
-		"ViewType":           "Thumb",
-		"SortBy":             "SortName",
-		"SortOrder":          "Ascending",
-		"RememberIndexing":   false,
+		"Id":                      id,
+		"ViewType":                "Thumb",
+		"SortBy":                  "SortName",
+		"SortOrder":               "Ascending",
+		"RememberIndexing":        false,
 		"PrimaryImageAspectRatio": 1.0,
+		"CustomPrefs": map[string]string{
+			"views-home":            "view_schedule,view_trending,view_watching",
+			"landing-view_schedule": "home",
+			"landing-view_trending": "home",
+			"landing-view_watching": "home",
+		},
+		"ScrollDirection": "Horizontal",
+		"ShowBackdrop":    true,
+		"RememberSorting": false,
 	})
 }
 
 // GetLiveTvChannels handles GET /emby/LiveTv/Channels
 func (h *ItemsHandler) GetLiveTvChannels(c *gin.Context) {
-	c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
-		Items:            []model.BaseItemDto{},
-		TotalRecordCount: 0,
-	})
+	c.JSON(http.StatusOK, model.NewQueryResult([]model.BaseItemDto{}))
 }

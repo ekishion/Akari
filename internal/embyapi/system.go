@@ -52,8 +52,11 @@ func (h *SystemHandler) Ping(c *gin.Context) {
 // GetConfiguration handles /emby/System/Configuration
 func (h *SystemHandler) GetConfiguration(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
-		"ServerName":                 h.cfg.ServerName,
+		"ServerName":                     h.cfg.ServerName,
 		"EnableDashboardResponseCaching": true,
+		"EnableUserViews":                true,
+		"IsPortAuthorized":               true,
+		"EnableGroupingSpannedItems":     false,
 	})
 }
 

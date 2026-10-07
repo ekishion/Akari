@@ -233,17 +233,51 @@ func (c *Client) GetCalendar() ([]BangumiSubject, error) {
 
 	baseUrl := c.GetBaseUrl()
 
-	// 1. If using default official api.bgm.tv, try next.bgm.tv first
+	// 1. Direct query {baseUrl}/calendar (standard Bangumi endpoint supported by official API and mirrors)
+	primaryUrl := fmt.Sprintf("%s/calendar", baseUrl)
+	req, err := http.NewRequest(http.MethodGet, primaryUrl, nil)
+	if err == nil {
+		req.Header.Set("User-Agent", BangumiUserAgent)
+		req.Header.Set("Accept", "application/json")
+		resp, err := c.httpClient.Do(req)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			var days []struct {
+				Weekday struct {
+					Id int `json:"id"`
+				} `json:"weekday"`
+				Items []BangumiSubject `json:"items"`
+			}
+			if err := json.Unmarshal(body, &days); err == nil && len(days) > 0 {
+				var result []BangumiSubject
+				for _, d := range days {
+					for _, sub := range d.Items {
+						sub.AirWeekday = d.Weekday.Id
+						result = append(result, sub)
+					}
+				}
+				if len(result) > 0 {
+					c.cacheImages(result)
+					c.setCache(cacheKey, result, 2*time.Hour)
+					return result, nil
+				}
+			}
+		}
+	}
+
+	// 2. Fallback to next.bgm.tv if official domain
 	if baseUrl == "https://api.bgm.tv" {
 		reqUrl := "https://next.bgm.tv/p1/calendar"
-		req, err := http.NewRequest(http.MethodGet, reqUrl, nil)
-		if err == nil {
-			req.Header.Set("User-Agent", BangumiUserAgent)
-			req.Header.Set("Accept", "application/json")
-			resp, err := c.httpClient.Do(req)
-			if err == nil && resp.StatusCode == http.StatusOK {
-				defer resp.Body.Close()
-				body, _ := io.ReadAll(resp.Body)
+		req2, err2 := http.NewRequest(http.MethodGet, reqUrl, nil)
+		if err2 == nil {
+			req2.Header.Set("User-Agent", BangumiUserAgent)
+			req2.Header.Set("Accept", "application/json")
+			fastClient := &http.Client{Timeout: 3 * time.Second}
+			resp2, err2 := fastClient.Do(req2)
+			if err2 == nil && resp2.StatusCode == http.StatusOK {
+				defer resp2.Body.Close()
+				body, _ := io.ReadAll(resp2.Body)
 				var rawCalendar map[string][]struct {
 					Subject BangumiSubject `json:"subject"`
 				}
@@ -269,39 +303,6 @@ func (c *Client) GetCalendar() ([]BangumiSubject, error) {
 		}
 	}
 
-	// 2. Query {baseUrl}/calendar (supported by official API and mirrors)
-	fallbackUrl := fmt.Sprintf("%s/calendar", baseUrl)
-	req2, err2 := http.NewRequest(http.MethodGet, fallbackUrl, nil)
-	if err2 == nil {
-		req2.Header.Set("User-Agent", BangumiUserAgent)
-		req2.Header.Set("Accept", "application/json")
-		resp2, err2 := c.httpClient.Do(req2)
-		if err2 == nil && resp2.StatusCode == http.StatusOK {
-			defer resp2.Body.Close()
-			body, _ := io.ReadAll(resp2.Body)
-			var days []struct {
-				Weekday struct {
-					Id int `json:"id"`
-				} `json:"weekday"`
-				Items []BangumiSubject `json:"items"`
-			}
-			if err := json.Unmarshal(body, &days); err == nil && len(days) > 0 {
-				var result []BangumiSubject
-				for _, d := range days {
-					for _, sub := range d.Items {
-						sub.AirWeekday = d.Weekday.Id
-						result = append(result, sub)
-					}
-				}
-				if len(result) > 0 {
-					c.cacheImages(result)
-					c.setCache(cacheKey, result, 2*time.Hour)
-					return result, nil
-				}
-			}
-		}
-	}
-
 	return nil, fmt.Errorf("all calendar endpoints failed")
 }
 
@@ -314,14 +315,15 @@ func (c *Client) GetTrending(limit, offset int) ([]BangumiSubject, error) {
 
 	baseUrl := c.GetBaseUrl()
 
-	// 1. Try next.bgm.tv if on official domain
+	// 1. Try next.bgm.tv if on official domain (with quick 3s timeout)
 	if baseUrl == "https://api.bgm.tv" {
 		reqUrl := fmt.Sprintf("https://next.bgm.tv/p1/trending/subjects?type=2&limit=%d&offset=%d", limit, offset)
 		req, err := http.NewRequest(http.MethodGet, reqUrl, nil)
 		if err == nil {
 			req.Header.Set("User-Agent", BangumiUserAgent)
 			req.Header.Set("Accept", "application/json")
-			resp, err := c.httpClient.Do(req)
+			fastClient := &http.Client{Timeout: 3 * time.Second}
+			resp, err := fastClient.Do(req)
 			if err == nil && resp.StatusCode == http.StatusOK {
 				defer resp.Body.Close()
 				body, _ := io.ReadAll(resp.Body)
@@ -343,15 +345,7 @@ func (c *Client) GetTrending(limit, offset int) ([]BangumiSubject, error) {
 		}
 	}
 
-	// 2. Fallback to v0 search
-	fallbackSubjects, err := c.Search("", limit)
-	if err == nil && len(fallbackSubjects) > 0 {
-		c.cacheImages(fallbackSubjects)
-		c.setCache(cacheKey, fallbackSubjects, 1*time.Hour)
-		return fallbackSubjects, nil
-	}
-
-	// 3. Fallback to calendar if search is empty
+	// 2. Reliable fallback: use Calendar schedule items (current broadcasting hits)
 	cal, err := c.GetCalendar()
 	if err == nil && len(cal) > 0 {
 		if len(cal) > limit {

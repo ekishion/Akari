@@ -20,21 +20,13 @@ func NewViewsHandler(cfg *config.Config) *ViewsHandler {
 // GetUserViews handles GET /emby/Users/:id/Views
 func (h *ViewsHandler) GetUserViews(c *gin.Context) {
 	views := mapper.CreateVirtualViews(h.cfg.ServerId)
-
-	c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
-		Items:            views,
-		TotalRecordCount: len(views),
-	})
+	c.JSON(http.StatusOK, model.NewQueryResult(views))
 }
 
 // GetMediaFolders handles GET /emby/Library/MediaFolders and /Library/MediaFolders
 func (h *ViewsHandler) GetMediaFolders(c *gin.Context) {
 	folders := mapper.CreateCollectionFolders(h.cfg.ServerId)
-
-	c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
-		Items:            folders,
-		TotalRecordCount: len(folders),
-	})
+	c.JSON(http.StatusOK, model.NewQueryResult(folders))
 }
 
 // GetGroupingOptions handles GET /Users/:id/GroupingOptions
@@ -45,11 +37,16 @@ func (h *ViewsHandler) GetGroupingOptions(c *gin.Context) {
 // GetRootFolder handles GET /Items/Root and /Users/:id/Items/Root
 func (h *ViewsHandler) GetRootFolder(c *gin.Context) {
 	c.JSON(http.StatusOK, model.BaseItemDto{
-		Name:     "Root",
-		ServerId: h.cfg.ServerId,
-		Id:       "root",
-		Type:     "AggregateFolder",
-		IsFolder: true,
+		Name:                     "Root",
+		ServerId:                 h.cfg.ServerId,
+		Id:                       "root",
+		Guid:                     "root",
+		Type:                     "AggregateFolder",
+		IsFolder:                 true,
+		LocationType:             "FileSystem",
+		Path:                     "/media",
+		SortName:                 "Root",
+		EnableMediaSourceDisplay: true,
 	})
 }
 
