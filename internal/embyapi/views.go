@@ -26,3 +26,30 @@ func (h *ViewsHandler) GetUserViews(c *gin.Context) {
 		TotalRecordCount: len(views),
 	})
 }
+
+// GetMediaFolders handles GET /emby/Library/MediaFolders and /Library/MediaFolders
+func (h *ViewsHandler) GetMediaFolders(c *gin.Context) {
+	folders := mapper.CreateCollectionFolders(h.cfg.ServerId)
+
+	c.JSON(http.StatusOK, model.QueryResult[model.BaseItemDto]{
+		Items:            folders,
+		TotalRecordCount: len(folders),
+	})
+}
+
+// GetGroupingOptions handles GET /Users/:id/GroupingOptions
+func (h *ViewsHandler) GetGroupingOptions(c *gin.Context) {
+	c.JSON(http.StatusOK, []any{})
+}
+
+// GetRootFolder handles GET /Items/Root and /Users/:id/Items/Root
+func (h *ViewsHandler) GetRootFolder(c *gin.Context) {
+	c.JSON(http.StatusOK, model.BaseItemDto{
+		Name:     "Root",
+		ServerId: h.cfg.ServerId,
+		Id:       "root",
+		Type:     "AggregateFolder",
+		IsFolder: true,
+	})
+}
+

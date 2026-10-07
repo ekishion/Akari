@@ -153,6 +153,8 @@ func SetupRouter(
 		rg.GET("/Items/:id/Images/Primary", itemsHandler.GetPrimaryImage)
 
 		// Metadata endpoints (Infuse / Emby probes)
+		rg.GET("/Library/MediaFolders", viewsHandler.GetMediaFolders)
+		rg.GET("/Items/Root", viewsHandler.GetRootFolder)
 		rg.GET("/Items/Counts", itemsHandler.GetItemCounts)
 		rg.GET("/Studios", itemsHandler.GetStudios)
 		rg.GET("/Genres", itemsHandler.GetGenres)
@@ -175,6 +177,8 @@ func SetupRouter(
 		{
 			authed.GET("/Users/:id", usersHandler.GetUser)
 			authed.GET("/Users/:id/Views", viewsHandler.GetUserViews)
+			authed.GET("/Users/:id/GroupingOptions", viewsHandler.GetGroupingOptions)
+			authed.GET("/Users/:id/Items/Root", viewsHandler.GetRootFolder)
 			authed.GET("/Users/:id/Items", itemsHandler.GetUserItems)
 			authed.GET("/Users/:id/Items/Latest", itemsHandler.GetUserItems)
 			authed.GET("/Users/:id/Items/Resume", itemsHandler.GetResumeItems)

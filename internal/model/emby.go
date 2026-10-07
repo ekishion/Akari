@@ -75,19 +75,31 @@ type UserDto struct {
 
 type UserConfiguration struct {
 	PlayDefaultAudioTrack      bool     `json:"PlayDefaultAudioTrack"`
-	SubtitleLanguagePreference string   `json:"SubtitleLanguagePreference,omitempty"`
+	SubtitleLanguagePreference string   `json:"SubtitleLanguagePreference"`
 	DisplayMissingEpisodes     bool     `json:"DisplayMissingEpisodes"`
 	EnableNextEpisodeAutoPlay  bool     `json:"EnableNextEpisodeAutoPlay"`
-	GroupedFolders             []string `json:"GroupedFolders,omitempty"`
+	GroupedFolders             []string `json:"GroupedFolders"`
+	MyMediaExcludes            []string `json:"MyMediaExcludes"`
+	OrderedViews               []string `json:"OrderedViews"`
+	LatestItemsExcludes        []string `json:"LatestItemsExcludes"`
+	HidePlayedInLatest         bool     `json:"HidePlayedInLatest"`
+	RememberAudioSelections    bool     `json:"RememberAudioSelections"`
+	RememberSubtitleSelections bool     `json:"RememberSubtitleSelections"`
 }
 
 type UserPolicy struct {
 	IsAdministrator     bool     `json:"IsAdministrator"`
 	IsDisabled          bool     `json:"IsDisabled"`
+	IsHidden            bool     `json:"IsHidden"`
 	EnableMediaPlayback bool     `json:"EnableMediaPlayback"`
 	EnableAllDevices    bool     `json:"EnableAllDevices"`
+	EnableAllChannels   bool     `json:"EnableAllChannels"`
+	EnableAllFolders    bool     `json:"EnableAllFolders"`
 	EnableAllLibraries  bool     `json:"EnableAllLibraries"`
-	EnabledLibraries    []string `json:"EnabledLibraries,omitempty"`
+	EnabledFolders      []string `json:"EnabledFolders"`
+	EnabledLibraries    []string `json:"EnabledLibraries"`
+	BlockedMediaFolders []string `json:"BlockedMediaFolders"`
+	BlockedChannels     []string `json:"BlockedChannels"`
 }
 
 // BaseItemDto represents movies, series, seasons, episodes, views, etc.
@@ -96,7 +108,7 @@ type BaseItemDto struct {
 	OriginalTitle           string            `json:"OriginalTitle,omitempty"`
 	ServerId                string            `json:"ServerId,omitempty"`
 	Id                      string            `json:"Id"`
-	Type                    string            `json:"Type"` // Series, Season, Episode, CollectionFolder, AggregateFolder
+	Type                    string            `json:"Type"` // UserView, Series, Season, Episode, CollectionFolder, AggregateFolder
 	CollectionType          string            `json:"CollectionType,omitempty"` // tvshows, movies
 	Overview                string            `json:"Overview,omitempty"`
 	RunTimeTicks            int64             `json:"RunTimeTicks,omitempty"`
@@ -121,6 +133,9 @@ type BaseItemDto struct {
 	ProviderIds             map[string]string `json:"ProviderIds,omitempty"`
 	ImageTags               map[string]string `json:"ImageTags,omitempty"`
 	BackdropImageTags       []string          `json:"BackdropImageTags,omitempty"`
+	PrimaryImageAspectRatio float64           `json:"PrimaryImageAspectRatio,omitempty"`
+	DisplayPreferencesId    string            `json:"DisplayPreferencesId,omitempty"`
+	ChannelId               *string           `json:"ChannelId,omitempty"`
 	UserData                *UserItemDataDto  `json:"UserData,omitempty"`
 	MediaType               string            `json:"MediaType,omitempty"` // Video
 	Container               string            `json:"Container,omitempty"` // mp4
