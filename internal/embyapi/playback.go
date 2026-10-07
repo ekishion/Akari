@@ -489,6 +489,15 @@ func findEpisodeURL(roads []engine.Road, epIndex int, epSort int) string {
 		}
 	}
 
+	// 3. Fallback for single-episode / movie / OVA where label is "正片" / "全集" / "播放" etc.
+	if epIndex == 1 {
+		for _, road := range roads {
+			if len(road.Data) > 0 {
+				return road.Data[0]
+			}
+		}
+	}
+
 	return ""
 }
 

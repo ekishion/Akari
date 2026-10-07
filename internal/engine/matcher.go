@@ -77,6 +77,19 @@ func CleanTitle(s string) string {
 	return s
 }
 
+func stripFormatWords(s string) string {
+	s = strings.ReplaceAll(s, "剧场版", "")
+	s = strings.ReplaceAll(s, "动画电影", "")
+	s = strings.ReplaceAll(s, "电影版", "")
+	s = strings.ReplaceAll(s, "电影", "")
+	s = strings.ReplaceAll(s, "特别篇", "")
+	s = strings.ReplaceAll(s, "总集篇", "")
+	s = strings.ReplaceAll(s, "ova", "")
+	s = strings.ReplaceAll(s, "oad", "")
+	s = strings.ReplaceAll(s, "sp", "")
+	return strings.TrimSpace(s)
+}
+
 // ScoreCandidate evaluates how closely candidate matches target (0-100)
 func ScoreCandidate(target, candidate string) int {
 	targetClean := CleanTitle(target)
@@ -107,29 +120,41 @@ func ScoreCandidate(target, candidate string) int {
 		return 15 // Very heavy penalty
 	}
 
-	// Specific discriminator keywords (e.g. MyGO, Ave Mujica, OVA, 剧场版)
-	discriminators := []string{"mygo", "avemujica", "剧场版", "ova", "外传", "特别篇"}
-	for _, d := range discriminators {
-		tHas := strings.Contains(targetClean, d)
-		cHas := strings.Contains(candClean, d)
-		if tHas && !cHas {
-			return 10 // Target has specific spinoff/movie, candidate doesn't
-		}
-		if !tHas && cHas {
-			return 10 // Target does not have spinoff/movie, but candidate does
-		}
+	// Distinct franchise sub-brands
+	if strings.Contains(targetClean, "mygo") != strings.Contains(candClean, "mygo") {
+		return 10
+	}
+	if strings.Contains(targetClean, "avemujica") != strings.Contains(candClean, "avemujica") {
+		return 10
+	}
+
+	// Base format comparison (e.g. "超辉夜姬！" vs "超辉夜姬 剧场版" or "鬼灭之刃 无限列车篇" vs "鬼灭之刃 剧场版 无限列车篇")
+	targetBase := stripFormatWords(targetClean)
+	candBase := stripFormatWords(candClean)
+	if targetBase != "" && candBase != "" && targetBase == candBase {
+		return 95
 	}
 
 	// Calculate character overlap ratio
 	overlap := commonSubsequenceRatio(targetClean, candClean)
 	score := int(overlap * 80)
 
+	// Also check overlap of base titles without format noise
+	if targetBase != "" && candBase != "" {
+		baseOverlap := commonSubsequenceRatio(targetBase, candBase)
+		baseScore := int(baseOverlap * 85)
+		if baseScore > score {
+			score = baseScore
+		}
+	}
+
 	// Season bonus
 	if targetSeason > 0 && candSeason == targetSeason {
 		score += 20
 	}
 
-	if strings.Contains(candClean, targetClean) || strings.Contains(targetClean, candClean) {
+	if strings.Contains(candClean, targetClean) || strings.Contains(targetClean, candClean) ||
+		(targetBase != "" && (strings.Contains(candBase, targetBase) || strings.Contains(targetBase, candBase))) {
 		score += 15
 	}
 
@@ -213,6 +238,20 @@ func GenerateSearchQueries(title, originalTitle, cnTitle string) []string {
 	noPunct := rePunctuation.ReplaceAllString(title, "")
 	add(noPunct)
 
+	// Also strip punctuation from originalTitle and cnTitle
+	if originalTitle != "" {
+		origCleaned := rePunctuation.ReplaceAllString(originalTitle, " ")
+		add(origCleaned)
+		origNoPunct := rePunctuation.ReplaceAllString(originalTitle, "")
+		add(origNoPunct)
+	}
+	if cnTitle != "" {
+		cnCleaned := rePunctuation.ReplaceAllString(cnTitle, " ")
+		add(cnCleaned)
+		cnNoPunct := rePunctuation.ReplaceAllString(cnTitle, "")
+		add(cnNoPunct)
+	}
+
 	// 4. Spaced title (e.g. "FX战士久留美" -> "FX 战士久留美")
 	spaced := reAlphaHan.ReplaceAllString(title, "$1 $2")
 	add(spaced)
@@ -224,8 +263,13 @@ func GenerateSearchQueries(title, originalTitle, cnTitle string) []string {
 		add(strings.ReplaceAll(noPunct, "已经死了", "已死"))
 	}
 
-	// 6. Base title without season suffix
-	// e.g. "药屋少女的呢喃 第三季" -> "药屋少女的呢喃"
+	// 6. Base title without format words
+	baseNoFormat := strings.TrimSpace(stripFormatWords(noPunct))
+	if baseNoFormat != "" && baseNoFormat != noPunct {
+		add(baseNoFormat)
+	}
+
+	// 7. Base title without season suffix
 	reSeasonSuffix := regexp.MustCompile(`(?i)(?:第[0-9一二三四五]季|season\s*[0-9]+|s[0-9]+)$`)
 	base := strings.TrimSpace(reSeasonSuffix.ReplaceAllString(strings.TrimSpace(cleaned), ""))
 	if base != "" && base != cleaned {
@@ -233,8 +277,7 @@ func GenerateSearchQueries(title, originalTitle, cnTitle string) []string {
 		add(rePunctuation.ReplaceAllString(base, ""))
 	}
 
-	// 7. Subtitle / Spinoff keywords for long titles
-	// e.g. "BanG Dream! It's MyGO!!!!!" -> "MyGO"
+	// 8. Subtitle / Spinoff keywords for long titles
 	if strings.Contains(strings.ToLower(title), "mygo") {
 		add("MyGO")
 		add("BanG Dream")
@@ -243,7 +286,7 @@ func GenerateSearchQueries(title, originalTitle, cnTitle string) []string {
 		add("Ave Mujica")
 	}
 
-	// 8. If original title has season, extract base of original title
+	// 9. If original title has season, extract base of original title
 	if originalTitle != "" {
 		origBase := strings.TrimSpace(reSeasonSuffix.ReplaceAllString(strings.TrimSpace(originalTitle), ""))
 		if origBase != "" {
