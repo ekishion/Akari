@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react'
-import { X, Key, Plus, Trash2, Copy, Check, ShieldCheck, Laptop } from 'lucide-react'
+import { Key, Plus, Trash2, Copy, Check, ShieldCheck, Laptop } from 'lucide-react'
 import { api } from '../api'
 import type { UserView, UserToken } from '../types'
+import { MdDialog } from './md3/MdDialog'
+import { MdButton } from './md3/MdButton'
+import { MdTextField } from './md3/MdTextField'
 
 interface UserTokenModalProps {
   user: UserView | null
@@ -70,103 +73,103 @@ export const UserTokenModal: React.FC<UserTokenModalProps> = ({ user, isOpen, on
     setTimeout(() => setCopiedToken(null), 2000)
   }
 
-  if (!isOpen || !user) return null
+  if (!user) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
-      <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/50">
-          <div className="flex items-center space-x-2">
-            <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
-              <Key className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-base font-semibold text-white">客户端访问令牌: {user.name}</h3>
-              <p className="text-xs text-slate-400">
-                可为电视盒子、Apple TV Infuse、VidHub 等客户端生成免密直连 API 令牌
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+    <MdDialog
+      open={isOpen}
+      onClose={onClose}
+      title={`客户端访问令牌: ${user.name}`}
+      subtitle="可为电视盒子、Apple TV Infuse、VidHub 等客户端生成免密直连 API 令牌。"
+      icon={<Key className="w-5 h-5 text-[var(--md-primary)]" />}
+      maxWidth="2xl"
+      actions={
+        <MdButton variant="tonal" onClick={onClose}>
+          完成
+        </MdButton>
+      }
+    >
+      <div className="space-y-5">
+        {/* Create Token Form */}
 
         {/* Create Token Form */}
-        <form onSubmit={handleCreateToken} className="p-6 border-b border-slate-800 bg-slate-900/50 flex gap-2">
-          <div className="relative flex-1">
-            <Laptop className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
+        <form onSubmit={handleCreateToken} className="flex gap-2.5">
+          <div className="flex-1">
+            <MdTextField
               value={clientName}
               onChange={(e) => setClientName(e.target.value)}
-              placeholder="设备或客户端备注，例如: 客厅 Apple TV、卧室 iPad Infuse..."
-              className="w-full pl-10 pr-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-pink-500 transition-colors"
+              placeholder="设备备注，例如: 客厅 Apple TV、卧室 iPad Infuse..."
+              leadingIcon={<Laptop className="w-4 h-4" />}
             />
           </div>
-          <button
+          <MdButton
             type="submit"
+            variant="filled"
             disabled={creating}
-            className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-medium text-sm rounded-xl flex items-center space-x-1.5 transition-all shadow-md shadow-emerald-500/20 disabled:opacity-50 cursor-pointer shrink-0"
+            loading={creating}
+            icon={<Plus className="w-4 h-4" />}
           >
-            <Plus className="w-4 h-4" />
-            <span>{creating ? '生成中...' : '生成新令牌'}</span>
-          </button>
+            {creating ? '生成中...' : '生成新令牌'}
+          </MdButton>
         </form>
 
         {/* Tokens List */}
-        <div className="p-6 overflow-y-auto space-y-3 flex-1">
-          {error && <div className="p-3 bg-red-500/10 text-red-400 text-xs rounded-xl">{error}</div>}
+        <div className="space-y-3">
+          {error && (
+            <div className="p-3 bg-[var(--md-danger)]/10 text-[var(--md-danger)] text-xs rounded-2xl border border-[var(--md-danger)]/20">
+              {error}
+            </div>
+          )}
 
           {tokens.length === 0 && !loading && (
-            <div className="text-center py-10 text-slate-500">
-              <ShieldCheck className="w-8 h-8 mx-auto mb-2 opacity-40" />
-              <p className="text-sm">暂无独立客户端令牌，可通过上方输入备注立即生成</p>
+            <div className="text-center py-10 text-[var(--md-on-surface-variant)]/60 bg-[var(--md-surface-container-low)] dark:bg-[var(--md-surface-container)]/40 rounded-2xl border border-dashed border-[var(--md-outline-variant)]">
+              <ShieldCheck className="w-9 h-9 mx-auto mb-2 opacity-30" />
+              <p className="text-sm font-medium">暂无独立客户端令牌</p>
+              <p className="text-xs text-[var(--md-on-surface-variant)]/50 mt-1">
+                可通过上方输入设备备注并立即生成
+              </p>
             </div>
           )}
 
           {tokens.map((t) => (
             <div
               key={t.token}
-              className="p-4 bg-slate-950/80 border border-slate-800 rounded-xl flex items-center justify-between gap-3 group hover:border-slate-700 transition-colors"
+              className="p-4 bg-[var(--md-surface-container-low)] dark:bg-[var(--md-surface-container)] border border-[var(--md-outline-variant)] rounded-2xl flex items-center justify-between gap-3 group hover:border-[var(--md-primary)]/40 transition-colors"
             >
               <div className="min-w-0 flex-1">
-                <div className="flex items-center space-x-2">
-                  <span className="font-semibold text-sm text-slate-200">{t.clientName || 'Emby Client'}</span>
-                  <span className="text-[11px] text-slate-500">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-sm text-[var(--md-on-surface)]">
+                    {t.clientName || 'Emby Client'}
+                  </span>
+                  <span className="text-[11px] text-[var(--md-on-surface-variant)]/70">
                     创建于 {new Date(t.createdAt).toLocaleDateString()}
                   </span>
                 </div>
-                <div className="font-mono text-xs text-pink-400 bg-slate-900 px-2 py-1 rounded-lg mt-1.5 inline-block select-all max-w-full truncate">
+                <div className="font-mono text-xs text-[var(--md-primary)] bg-[var(--md-surface-container-high)] border border-[var(--md-outline-variant)]/50 px-2.5 py-1 rounded-xl mt-1.5 inline-block select-all max-w-full truncate">
                   {t.token}
                 </div>
               </div>
 
-              <div className="flex items-center space-x-2 shrink-0">
-                <button
+              <div className="flex items-center gap-2 shrink-0">
+                <MdButton
+                  variant="tonal"
+                  size="sm"
                   onClick={() => handleCopy(t.token)}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg flex items-center space-x-1 transition-colors cursor-pointer"
-                >
-                  {copiedToken === t.token ? (
-                    <>
-                      <Check className="w-3.5 h-3.5 text-emerald-400" />
-                      <span className="text-emerald-400">已复制</span>
-                    </>
-                  ) : (
-                    <>
+                  icon={
+                    copiedToken === t.token ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-500" />
+                    ) : (
                       <Copy className="w-3.5 h-3.5" />
-                      <span>复制令牌</span>
-                    </>
-                  )}
-                </button>
+                    )
+                  }
+                >
+                  {copiedToken === t.token ? '已复制' : '复制令牌'}
+                </MdButton>
                 <button
+                  type="button"
                   onClick={() => handleRevokeToken(t.token)}
                   title="注销令牌"
-                  className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors cursor-pointer"
+                  className="p-2 text-[var(--md-on-surface-variant)] hover:text-[var(--md-danger)] hover:bg-[var(--md-danger)]/10 rounded-full transition-colors cursor-pointer"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -174,17 +177,7 @@ export const UserTokenModal: React.FC<UserTokenModalProps> = ({ user, isOpen, on
             </div>
           ))}
         </div>
-
-        {/* Footer */}
-        <div className="px-6 py-3 border-t border-slate-800 bg-slate-950/50 flex justify-end">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-xl transition-colors cursor-pointer"
-          >
-            完成
-          </button>
-        </div>
       </div>
-    </div>
+    </MdDialog>
   )
 }

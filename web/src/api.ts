@@ -1,14 +1,32 @@
-import type { SystemStatus, SystemConfig, UserView, UserToken, RulePlugin, PlaybackHistory, TestResult, MirrorTestResult, GlobalSynonym, SubjectAlias } from './types'
+import type {
+  SystemStatus,
+  SystemConfig,
+  UserView,
+  UserToken,
+  RulePlugin,
+  TestResult,
+  MirrorTestResult,
+  GlobalSynonym,
+  SubjectAlias,
+  AdminAuthResponse,
+  AdminProfile,
+  AuditLog,
+  IPBan,
+  TelemetryEvent,
+} from './types'
 
 const BASE_URL = ''
 
 function getAuthHeaders(): Record<string, string> {
-  const token = localStorage.getItem('akari_token')
+  const adminToken = localStorage.getItem('akari_admin_token')
+  const userToken = localStorage.getItem('akari_token')
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   }
-  if (token) {
-    headers['X-Emby-Token'] = token
+  if (adminToken) {
+    headers['Authorization'] = `Bearer ${adminToken}`
+  } else if (userToken) {
+    headers['X-Emby-Token'] = userToken
   }
   return headers
 }
@@ -16,13 +34,19 @@ function getAuthHeaders(): Record<string, string> {
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = {
     ...getAuthHeaders(),
-    ...(options.headers as Record<string, string> || {}),
+    ...((options.headers as Record<string, string>) || {}),
   }
 
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
     headers,
   })
+
+  if (res.status === 401 && !path.startsWith('/api/auth/login')) {
+    // If unauthorized, clear token and notify auth state
+    localStorage.removeItem('akari_admin_token')
+    window.dispatchEvent(new CustomEvent('akari_unauthorized'))
+  }
 
   if (!res.ok) {
     let errMsg = `Request failed (${res.status})`
@@ -39,6 +63,59 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  // Admin Auth
+  adminLogin: (username: string, password: string) =>
+    request<AdminAuthResponse>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  adminLogout: () =>
+    request<{ message: string }>('/api/auth/logout', {
+      method: 'POST',
+    }),
+  adminProfile: () => request<AdminProfile>('/api/auth/me'),
+  adminChangePassword: (oldPassword: string, newPassword: string) =>
+    request<{ message: string }>('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ oldPassword, newPassword }),
+    }),
+
+  // Security & Audit
+  getAuditLogs: (limit: number = 50, offset: number = 0) =>
+    request<{ total: number; items: AuditLog[] }>(`/api/security/audit?limit=${limit}&offset=${offset}`),
+  clearAuditLogs: () =>
+    request<{ message: string }>('/api/security/audit', { method: 'DELETE' }),
+  getBannedIPs: () => request<{ items: IPBan[] }>('/api/security/bans'),
+  unbanIP: (ip: string) =>
+    request<{ message: string }>('/api/security/unban', {
+      method: 'POST',
+      body: JSON.stringify({ ip }),
+    }),
+
+  // SSE Real-time Telemetry Stream
+  subscribeTelemetry: (onData: (data: TelemetryEvent) => void, onError?: (err: any) => void): (() => void) => {
+    const token = localStorage.getItem('akari_admin_token') || ''
+    const url = `${BASE_URL}/api/events?token=${encodeURIComponent(token)}`
+    const eventSource = new EventSource(url)
+
+    eventSource.addEventListener('telemetry', (e: MessageEvent) => {
+      try {
+        const parsed = JSON.parse(e.data) as TelemetryEvent
+        onData(parsed)
+      } catch (err) {
+        console.error('Failed to parse telemetry SSE:', err)
+      }
+    })
+
+    eventSource.onerror = (e) => {
+      if (onError) onError(e)
+    }
+
+    return () => {
+      eventSource.close()
+    }
+  },
+
   // System
   getStatus: () => request<SystemStatus>('/api/system/status'),
   getConfig: () => request<SystemConfig>('/api/system/config'),
@@ -54,20 +131,7 @@ export const api = {
     }),
   cleanCache: () => request<{ status: string; message: string }>('/api/system/clean-cache', { method: 'POST' }),
 
-  // Auth
-  login: (username: string, password?: string) =>
-    request<{ token: string; user: any; serverId: string }>('/api/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ username, password }),
-    }),
-  getMe: () => request<any>('/api/auth/me'),
-  changePassword: (userId: string, newPassword: string) =>
-    request<{ status: string }>('/api/auth/change-password', {
-      method: 'POST',
-      body: JSON.stringify({ userId, newPassword }),
-    }),
-
-  // Users
+  // Emby Users & Tokens
   listUsers: () => request<UserView[]>('/api/users'),
   createUser: (username: string, password?: string, isAdmin: boolean = false) =>
     request<any>('/api/users', {
@@ -75,8 +139,6 @@ export const api = {
       body: JSON.stringify({ username, password, isAdmin }),
     }),
   deleteUser: (id: string) => request<{ status: string }>(`/api/users/${id}`, { method: 'DELETE' }),
-
-  // User Tokens
   getUserTokens: (userId: string) => request<UserToken[]>(`/api/users/${userId}/tokens`),
   createUserToken: (userId: string, clientName: string) =>
     request<{ token: string; userId: string; clientName: string }>(`/api/users/${userId}/tokens`, {
@@ -85,8 +147,6 @@ export const api = {
     }),
   revokeUserToken: (userId: string, token: string) =>
     request<{ status: string }>(`/api/users/${userId}/tokens/${token}`, { method: 'DELETE' }),
-
-  // Bangumi Bind
   bindBangumi: (userId: string, accessToken: string) =>
     request<{ status: string; username: string; nickname: string; avatar: any }>(`/api/users/${userId}/bangumi`, {
       method: 'POST',
@@ -95,7 +155,7 @@ export const api = {
   unbindBangumi: (userId: string) =>
     request<{ status: string }>(`/api/users/${userId}/bangumi`, { method: 'DELETE' }),
 
-  // Rules
+  // Rules & Plugins
   listRules: () => request<RulePlugin[]>('/api/rules'),
   saveRule: (rule: any) =>
     request<RulePlugin>('/api/rules', {
@@ -120,9 +180,6 @@ export const api = {
       body: JSON.stringify(params),
     }),
 
-  // Playback History
-  listHistory: () => request<PlaybackHistory[]>('/api/history'),
-
   // Aliases & Synonyms
   listGlobalSynonyms: () => request<GlobalSynonym[]>('/api/aliases/synonyms'),
   upsertGlobalSynonym: (pattern: string, replacement: string, enabled: boolean = true) =>
@@ -144,4 +201,3 @@ export const api = {
   deleteSubjectAliases: (subjectId: number) =>
     request<{ success: boolean }>(`/api/aliases/subjects/${subjectId}`, { method: 'DELETE' }),
 }
-

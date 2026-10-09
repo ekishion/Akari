@@ -2,7 +2,12 @@ package proxy
 
 import (
 	"bufio"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -20,15 +25,32 @@ import (
 )
 
 type StreamProxy struct {
-	cfg    *config.Config
-	db     *storage.DB
-	client *http.Client
+	cfg       *config.Config
+	db        *storage.DB
+	client    *http.Client
+	secretKey []byte
 }
 
 func NewStreamProxy(cfg *config.Config, db *storage.DB) *StreamProxy {
+	secretKey := make([]byte, 32)
+	if db != nil {
+		if secretStr, err := db.GetSetting("stream_proxy_secret"); err == nil && secretStr != "" {
+			if b, err := hex.DecodeString(secretStr); err == nil && len(b) == 32 {
+				secretKey = b
+			}
+		}
+	}
+	if secretKey[0] == 0 && secretKey[31] == 0 {
+		_, _ = rand.Read(secretKey)
+		if db != nil {
+			_ = db.SaveSetting("stream_proxy_secret", hex.EncodeToString(secretKey))
+		}
+	}
+
 	return &StreamProxy{
-		cfg: cfg,
-		db:  db,
+		cfg:       cfg,
+		db:        db,
+		secretKey: secretKey,
 		client: &http.Client{
 			Transport: &http.Transport{
 				Proxy: http.ProxyFromEnvironment,
@@ -246,3 +268,24 @@ func (p *StreamProxy) rewriteKeyLine(line, baseURL, referer, ua, proxyBase strin
 
 	return line[:uriIdx+5] + proxyURI + line[uriIdx+5+endIdx:]
 }
+
+func (p *StreamProxy) SignURL(targetURL string, exp time.Duration) (string, int64) {
+	expUnix := time.Now().Add(exp).Unix()
+	msg := fmt.Sprintf("%s:%d", targetURL, expUnix)
+	mac := hmac.New(sha256.New, p.secretKey)
+	mac.Write([]byte(msg))
+	token := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return token, expUnix
+}
+
+func (p *StreamProxy) VerifyToken(targetURL, token string, expUnix int64) bool {
+	if expUnix < time.Now().Unix() {
+		return false
+	}
+	msg := fmt.Sprintf("%s:%d", targetURL, expUnix)
+	mac := hmac.New(sha256.New, p.secretKey)
+	mac.Write([]byte(msg))
+	expected := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(token), []byte(expected))
+}
+

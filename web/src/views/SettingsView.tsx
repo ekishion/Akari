@@ -1,29 +1,51 @@
 import React, { useState, useEffect } from 'react'
+import { motion, type Variants } from 'framer-motion'
 import {
-  Settings,
-  Shield,
+  Lock,
   Trash2,
   CheckCircle2,
   AlertCircle,
   Server,
-  Zap,
-  Globe,
   Activity,
   Save,
+  Key,
 } from 'lucide-react'
 import { api } from '../api'
 import type { SystemConfig, SystemStatus, MirrorTestResult } from '../types'
+import { MdCard } from '../components/md3/MdCard'
+import { MdButton } from '../components/md3/MdButton'
+import { MdTextField } from '../components/md3/MdTextField'
+import { MdChip } from '../components/md3/MdChip'
+
+const containerVariants: Variants = {
+  hidden: { opacity: 0 },
+  show: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.08,
+    },
+  },
+}
+
+const itemVariants: Variants = {
+  hidden: { opacity: 0, y: 15 },
+  show: {
+    opacity: 1,
+    y: 0,
+    transition: { type: 'spring', stiffness: 350, damping: 25 },
+  },
+}
 
 interface SettingsViewProps {
   config: SystemConfig | null
-  status: SystemStatus | null
+  status?: SystemStatus | null
   onRefresh: () => void
 }
 
 const BGM_PRESETS = [
-  { name: '官方直连 (默认)', url: 'https://api.bgm.tv', desc: '官方原站 API' },
-  { name: 'Rin Cat 镜像', url: 'https://mirror.bgm.rin.cat', desc: '国内高速反代节点' },
-  { name: 'Chii 镜像', url: 'https://chii.ai', desc: '高可用公共反代' },
+  { name: '官方直连 (默认)', url: 'https://api.bgm.tv' },
+  { name: 'Rin Cat 镜像', url: 'https://mirror.bgm.rin.cat' },
+  { name: 'Chii 镜像', url: 'https://chii.ai' },
 ]
 
 const DANDAN_PRESETS = [
@@ -31,14 +53,12 @@ const DANDAN_PRESETS = [
   { name: '免签高可用节点', url: 'https://ddplay.retr0.xyz' },
 ]
 
-export const SettingsView: React.FC<SettingsViewProps> = ({ config, status, onRefresh }) => {
-  // Config form states
+export const SettingsView: React.FC<SettingsViewProps> = ({ config, onRefresh }) => {
   const [bangumiHost, setBangumiHost] = useState(config?.bangumiHost || 'https://api.bgm.tv')
   const [dandanHost, setDanDanHost] = useState(config?.dandanHost || 'https://api.dandanplay.net')
   const [serverName, setServerName] = useState(config?.serverName || 'Akari Media')
   const [customProxy, setCustomProxy] = useState(config?.customProxy || '')
 
-  // Sync with prop updates
   useEffect(() => {
     if (config) {
       setBangumiHost(config.bangumiHost || 'https://api.bgm.tv')
@@ -48,27 +68,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ config, status, onRe
     }
   }, [config])
 
-  // Config save state
   const [saveLoading, setSaveLoading] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
 
-  // Mirror testing state
   const [testingBgm, setTestingBgm] = useState(false)
   const [bgmTestResult, setBgmTestResult] = useState<MirrorTestResult | null>(null)
 
   // Password update states
+  const [oldPassword, setOldPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [pwdLoading, setPwdLoading] = useState(false)
   const [pwdSuccess, setPwdSuccess] = useState<string | null>(null)
   const [pwdError, setPwdError] = useState<string | null>(null)
 
-  // Cache cleaning state
   const [cleaning, setCleaning] = useState(false)
   const [cleanMsg, setCleanMsg] = useState<string | null>(null)
 
-  // Test Bangumi endpoint latency
   const handleTestBangumi = async (testUrl?: string) => {
     const target = (testUrl || bangumiHost).trim()
     if (!target) return
@@ -80,14 +97,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ config, status, onRe
     } catch (err: any) {
       setBgmTestResult({
         success: false,
-        error: err.message || '测试失败',
+        error: err.message || '网络连接测试失败',
       })
     } finally {
       setTestingBgm(false)
     }
   }
 
-  // Save network and server config
   const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault()
     setSaveLoading(true)
@@ -101,9 +117,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ config, status, onRe
         serverName: serverName.trim(),
         customProxy: customProxy.trim(),
       })
-      setSaveSuccess('服务参数与 Bangumi 镜像源已保存并实时生效！')
-      setTimeout(() => setSaveSuccess(null), 4000)
+      setSaveSuccess('服务端配置已成功保存并实时生效！')
       onRefresh()
+      setTimeout(() => setSaveSuccess(null), 3000)
     } catch (err: any) {
       setSaveError(err.message || '保存配置失败')
     } finally {
@@ -111,28 +127,34 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ config, status, onRe
     }
   }
 
-  // Update password
   const handleUpdatePassword = async (e: React.FormEvent) => {
     e.preventDefault()
+    setPwdSuccess(null)
+    setPwdError(null)
+
+    if (!oldPassword) {
+      setPwdError('请输入当前管理员旧密码')
+      return
+    }
+
+    if (newPassword.length < 6) {
+      setPwdError('新密码长度不能少于 6 位')
+      return
+    }
+
     if (newPassword !== confirmPassword) {
-      setPwdError('两次输入的密码不一致')
+      setPwdError('两次输入的新密码不一致')
       return
     }
 
     setPwdLoading(true)
-    setPwdError(null)
-    setPwdSuccess(null)
-
     try {
-      await api.changePassword('admin', newPassword.trim())
-      setPwdSuccess(
-        newPassword.trim() === ''
-          ? '密码已清除，已切换为单用户免密模式'
-          : '管理员密码已更新！'
-      )
+      await api.adminChangePassword(oldPassword, newPassword)
+      setPwdSuccess('管理员密码已成功更新！')
+      setOldPassword('')
       setNewPassword('')
       setConfirmPassword('')
-      onRefresh()
+      setTimeout(() => setPwdSuccess(null), 3000)
     } catch (err: any) {
       setPwdError(err.message || '更新密码失败')
     } finally {
@@ -140,333 +162,280 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ config, status, onRe
     }
   }
 
-  // Clean cache
   const handleCleanCache = async () => {
     setCleaning(true)
     setCleanMsg(null)
     try {
       const res = await api.cleanCache()
-      setCleanMsg(res.message || '缓存已清空')
-      setTimeout(() => setCleanMsg(null), 3000)
+      setCleanMsg(res.message || '缓存清理成功')
+      onRefresh()
     } catch (err: any) {
-      alert(err.message || '清理缓存失败')
+      setCleanMsg('清理失败: ' + err.message)
     } finally {
       setCleaning(false)
+      setTimeout(() => setCleanMsg(null), 3000)
     }
   }
 
-  const isBgmPreset = BGM_PRESETS.some((p) => p.url === bangumiHost.trim())
-
   return (
-    <div className="space-y-6 animate-fade-in max-w-4xl">
-      {/* Header */}
-      <div>
-        <h2 className="text-xl font-bold text-white tracking-tight flex items-center space-x-2">
-          <Settings className="w-5 h-5 text-slate-400" />
-          <span>系统设置与网络配置</span>
-        </h2>
-        <p className="text-xs text-slate-400 mt-0.5">
-          配置 Bangumi API 镜像源、DanDanPlay 弹幕端点、管理员密码与系统缓存维护
-        </p>
-      </div>
+    <motion.div
+      variants={containerVariants}
+      initial="hidden"
+      animate="show"
+      className="flex flex-col gap-6 pb-12"
+    >
+      {/* 1. Basic Server Profile */}
+      <motion.div variants={itemVariants}>
+        <MdCard variant="filled" className="p-6 sm:p-8">
+        <div className="flex items-center gap-3 mb-6 pb-4 border-b border-[var(--md-outline-variant)]/60">
+          <div className="p-2.5 rounded-2xl bg-[var(--md-primary-container)] text-[var(--md-on-primary-container)]">
+            <Server className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-[var(--md-on-surface)]">服务端核心参数</h3>
+            <p className="text-xs text-[var(--md-on-surface-variant)]">配置服务实例展示名称与全局代理节点</p>
+          </div>
+        </div>
 
-      {/* Bangumi Mirror Configuration Card */}
-      <div className="bg-slate-900/70 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2.5 text-white font-bold text-base">
-            <div className="p-1.5 bg-pink-500/10 rounded-lg text-pink-400 border border-pink-500/20">
-              <Globe className="w-4 h-4" />
+        <form onSubmit={handleSaveConfig} className="flex flex-col gap-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <MdTextField
+              label="服务器展示名称 (Server Name)"
+              placeholder="例如: Akari Media"
+              value={serverName}
+              onChange={(e) => setServerName(e.target.value)}
+              helperText="展示在 Emby 客户端连接列表中"
+              required
+            />
+
+            <MdTextField
+              label="自定义全局 HTTP 代理 (可选)"
+              placeholder="http://127.0.0.1:7890"
+              value={customProxy}
+              onChange={(e) => setCustomProxy(e.target.value)}
+              helperText="留空则自动检测并使用系统代理"
+            />
+          </div>
+
+          {/* Bangumi Mirrors */}
+          <div className="flex flex-col gap-3 pt-3 border-t border-[var(--md-outline-variant)]/40">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-[var(--md-on-surface)]">
+                Bangumi 元数据 API 镜像源
+              </label>
+              <MdButton
+                type="button"
+                variant="outlined"
+                size="sm"
+                loading={testingBgm}
+                onClick={() => handleTestBangumi()}
+                icon={<Activity className="w-3.5 h-3.5" />}
+              >
+                测速连通性
+              </MdButton>
             </div>
-            <span>Bangumi 番组计划 API 镜像源设置</span>
-          </div>
-          <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
-            热更新 · 无需重启
-          </span>
-        </div>
 
-        <p className="text-xs text-slate-400 leading-relaxed">
-          当直连官方主站出现网络波动或 DNS 污染时，可无缝切换至国内镜像节点或自建 Cloudflare Worker 反代，以提升番剧索引、每日放送和元数据的加载速度。
-        </p>
+            <MdTextField
+              placeholder="https://api.bgm.tv"
+              value={bangumiHost}
+              onChange={(e) => setBangumiHost(e.target.value)}
+            />
 
-        {/* Presets Selector */}
-        <div className="space-y-2 pt-1">
-          <label className="block text-xs font-semibold text-slate-300">常用预设镜像节点</label>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-            {BGM_PRESETS.map((preset) => {
-              const active = bangumiHost.trim() === preset.url
-              return (
-                <button
-                  key={preset.url}
-                  type="button"
+            {/* Presets */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-[var(--md-on-surface-variant)]">快捷预设:</span>
+              {BGM_PRESETS.map((p) => (
+                <MdChip
+                  key={p.url}
+                  label={p.name}
+                  selected={bangumiHost === p.url}
                   onClick={() => {
-                    setBangumiHost(preset.url)
-                    handleTestBangumi(preset.url)
+                    setBangumiHost(p.url)
+                    handleTestBangumi(p.url)
                   }}
-                  className={`p-3 rounded-2xl text-left border transition-all cursor-pointer flex flex-col justify-between ${
-                    active
-                      ? 'bg-pink-500/10 border-pink-500/40 text-pink-200 shadow-sm shadow-pink-500/10 ring-1 ring-pink-500/30'
-                      : 'bg-slate-950/60 border-slate-800/80 text-slate-300 hover:border-slate-700 hover:bg-slate-950'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-xs text-white">{preset.name}</span>
-                    {active && <span className="w-2 h-2 rounded-full bg-pink-400 animate-pulse" />}
-                  </div>
-                  <div className="font-mono text-[11px] text-slate-400 truncate mt-1">{preset.url}</div>
-                  <div className="text-[10px] text-slate-500 mt-1">{preset.desc}</div>
-                </button>
-              )
-            })}
-          </div>
-        </div>
+                />
+              ))}
+            </div>
 
-        {/* Custom Input & Test Bar */}
-        <div className="space-y-2 pt-2">
-          <div className="flex items-center justify-between">
-            <label className="block text-xs font-semibold text-slate-300">
-              API 端点 URL {!isBgmPreset && <span className="text-pink-400 font-normal">(自定义节点)</span>}
-            </label>
             {bgmTestResult && (
               <div
-                className={`text-xs flex items-center space-x-1.5 font-medium px-2 py-0.5 rounded-lg border ${
+                className={`p-3 rounded-2xl text-xs flex items-center gap-2 border ${
                   bgmTestResult.success
-                    ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
-                    : 'text-red-400 bg-red-500/10 border-red-500/20'
+                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                    : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20'
                 }`}
               >
                 {bgmTestResult.success ? (
                   <>
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>
-                      {bgmTestResult.message || '连接正常'} · 延迟 {bgmTestResult.latencyMs}ms
-                    </span>
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>节点测试成功 · 延迟: {bgmTestResult.latencyMs}ms ({bgmTestResult.message || 'OK'})</span>
                   </>
                 ) : (
                   <>
-                    <AlertCircle className="w-3.5 h-3.5" />
-                    <span className="truncate max-w-[260px]">{bgmTestResult.error || '连接失败'}</span>
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>节点测试失败: {bgmTestResult.error}</span>
                   </>
                 )}
               </div>
             )}
           </div>
 
-          <div className="flex flex-col sm:flex-row gap-2">
-            <input
-              type="text"
-              value={bangumiHost}
-              onChange={(e) => setBangumiHost(e.target.value)}
-              placeholder="https://api.bgm.tv"
-              className="flex-1 px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-xs font-mono text-slate-100 focus:outline-none focus:border-pink-500"
+          {/* DanDanPlay Mirrors */}
+          <div className="flex flex-col gap-3 pt-3 border-t border-[var(--md-outline-variant)]/40">
+            <label className="text-xs font-semibold text-[var(--md-on-surface)]">
+              弹弹play 弹幕 API 端点
+            </label>
+
+            <MdTextField
+              placeholder="https://api.dandanplay.net"
+              value={dandanHost}
+              onChange={(e) => setDanDanHost(e.target.value)}
             />
-            <button
-              type="button"
-              onClick={() => handleTestBangumi()}
-              disabled={testingBgm || !bangumiHost.trim()}
-              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl flex items-center justify-center space-x-1.5 transition-colors cursor-pointer disabled:opacity-50 shrink-0"
-            >
-              <Activity className={`w-3.5 h-3.5 ${testingBgm ? 'animate-spin text-pink-400' : 'text-slate-400'}`} />
-              <span>{testingBgm ? '测速中...' : '测试连通性'}</span>
-            </button>
-          </div>
-        </div>
-      </div>
 
-      {/* General Network & Server Parameters */}
-      <form onSubmit={handleSaveConfig} className="bg-slate-900/70 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2 text-white font-bold text-base">
-            <Server className="w-5 h-5 text-indigo-400" />
-            <span>核心服务与弹幕网络源</span>
-          </div>
-        </div>
-
-        {saveError && (
-          <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-xl flex items-center space-x-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{saveError}</span>
-          </div>
-        )}
-
-        {saveSuccess && (
-          <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs rounded-xl flex items-center space-x-2">
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
-            <span>{saveSuccess}</span>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-          <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">服务器显示名称</label>
-            <input
-              type="text"
-              value={serverName}
-              onChange={(e) => setServerName(e.target.value)}
-              placeholder="Akari Media"
-              className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">DanDanPlay 弹幕 API 端点</label>
-            <div className="space-y-1.5">
-              <input
-                type="text"
-                value={dandanHost}
-                onChange={(e) => setDanDanHost(e.target.value)}
-                placeholder="https://api.dandanplay.net"
-                className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs font-mono text-slate-100 focus:outline-none focus:border-indigo-500"
-              />
-              <div className="flex gap-1.5">
-                {DANDAN_PRESETS.map((dp) => (
-                  <button
-                    key={dp.url}
-                    type="button"
-                    onClick={() => setDanDanHost(dp.url)}
-                    className={`text-[10px] px-2 py-0.5 rounded-lg border transition-colors cursor-pointer ${
-                      dandanHost === dp.url
-                        ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30 font-medium'
-                        : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
-                    }`}
-                  >
-                    {dp.name}
-                  </button>
-                ))}
-              </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-[var(--md-on-surface-variant)]">快捷预设:</span>
+              {DANDAN_PRESETS.map((p) => (
+                <MdChip
+                  key={p.url}
+                  label={p.name}
+                  selected={dandanHost === p.url}
+                  onClick={() => setDanDanHost(p.url)}
+                />
+              ))}
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">自定义系统网络代理 (HTTP/HTTPS)</label>
-            <input
-              type="text"
-              value={customProxy}
-              onChange={(e) => setCustomProxy(e.target.value)}
-              placeholder="例如 http://127.0.0.1:7890 (留空为系统默认)"
-              className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-xl text-xs font-mono text-slate-100 focus:outline-none focus:border-indigo-500"
-            />
-          </div>
-
-          <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800/80">
-            <div className="text-slate-500">运行平台与架构</div>
-            <div className="text-slate-300 mt-0.5">
-              {status?.os} / {status?.arch} ({status?.goVersion})
+          {/* Feedback messages */}
+          {saveSuccess && (
+            <div className="p-3.5 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-semibold border border-emerald-500/20">
+              {saveSuccess}
             </div>
-          </div>
-        </div>
-
-        {/* Readonly info pills */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 text-[11px]">
-          <div className="p-2.5 bg-slate-950/50 rounded-xl border border-slate-800/60">
-            <div className="text-slate-500">HTTP 端口</div>
-            <div className="font-semibold text-slate-200 mt-0.5">{config?.httpPort}</div>
-          </div>
-          <div className="p-2.5 bg-slate-950/50 rounded-xl border border-slate-800/60">
-            <div className="text-slate-500">UDP 发现端口</div>
-            <div className="font-semibold text-slate-200 mt-0.5">{config?.udpPort}</div>
-          </div>
-          <div className="p-2.5 bg-slate-950/50 rounded-xl border border-slate-800/60 col-span-2">
-            <div className="text-slate-500">存储数据路径</div>
-            <div className="font-mono text-slate-300 mt-0.5 truncate">{config?.dataDir}</div>
-          </div>
-        </div>
-
-        <div className="flex justify-end pt-2">
-          <button
-            type="submit"
-            disabled={saveLoading}
-            className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl shadow-md shadow-indigo-600/20 transition-all cursor-pointer disabled:opacity-50 flex items-center space-x-1.5"
-          >
-            <Save className="w-3.5 h-3.5" />
-            <span>{saveLoading ? '保存中...' : '保存网络与服务设置'}</span>
-          </button>
-        </div>
-      </form>
-
-      {/* Admin Security Card */}
-      <div className="bg-slate-900/70 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
-        <div className="flex items-center space-x-2 text-white font-bold text-base">
-          <Shield className="w-5 h-5 text-pink-400" />
-          <span>安全与管理员密码</span>
-        </div>
-        <p className="text-xs text-slate-400">
-          当设置管理员密码后，系统会自动开启严格认证模式；若留空则运行在零配置免密单用户模式。
-        </p>
-
-        {pwdError && (
-          <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-xl flex items-center space-x-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{pwdError}</span>
-          </div>
-        )}
-
-        {pwdSuccess && (
-          <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs rounded-xl flex items-center space-x-2">
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
-            <span>{pwdSuccess}</span>
-          </div>
-        )}
-
-        <form onSubmit={handleUpdatePassword} className="space-y-3 pt-2">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">新密码</label>
-              <input
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="输入新密码 (留空清除)"
-                className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-slate-100 focus:outline-none focus:border-pink-500"
-              />
+          )}
+          {saveError && (
+            <div className="p-3.5 rounded-2xl bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-semibold border border-rose-500/20">
+              {saveError}
             </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">确认新密码</label>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="再次输入新密码"
-                className="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-slate-100 focus:outline-none focus:border-pink-500"
-              />
-            </div>
-          </div>
+          )}
 
           <div className="flex justify-end pt-2">
-            <button
+            <MdButton
               type="submit"
-              disabled={pwdLoading}
-              className="px-5 py-2 bg-pink-500 hover:bg-pink-600 text-white text-xs font-semibold rounded-xl shadow-md shadow-pink-500/20 transition-all cursor-pointer disabled:opacity-50"
+              variant="filled"
+              size="md"
+              loading={saveLoading}
+              icon={<Save className="w-4 h-4" />}
             >
-              {pwdLoading ? '保存中...' : '更新密码设置'}
-            </button>
+              保存配置
+            </MdButton>
           </div>
         </form>
-      </div>
+      </MdCard>
+      </motion.div>
 
-      {/* Maintenance & Cache */}
-      <div className="bg-slate-900/70 border border-slate-800 rounded-3xl p-6 shadow-xl flex items-center justify-between">
-        <div>
-          <div className="text-sm font-bold text-white flex items-center space-x-2">
-            <Zap className="w-4 h-4 text-amber-400" />
-            <span>内存与流嗅探缓存清理</span>
+      {/* 2. Admin Password Change */}
+      <motion.div variants={itemVariants}>
+        <MdCard variant="filled" className="p-6 sm:p-8">
+          <div className="flex items-center gap-3 mb-6 pb-4 border-b border-[var(--md-outline-variant)]/60">
+            <div className="p-2.5 rounded-2xl bg-[var(--md-primary-container)] text-[var(--md-on-primary-container)]">
+              <Key className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-[var(--md-on-surface)]">修改管理员密码</h3>
+              <p className="text-xs text-[var(--md-on-surface-variant)]">更新 Web 控制台登录凭据（bcrypt 安全哈希加密）</p>
+            </div>
           </div>
-          <p className="text-xs text-slate-400 mt-1">
-            清空 30 分钟串流临时解析结果与弹幕缓存，释放内存占用
-          </p>
-          {cleanMsg && (
-            <div className="text-xs text-emerald-400 mt-1 font-medium">{cleanMsg}</div>
-          )}
-        </div>
 
-        <button
-          onClick={handleCleanCache}
-          disabled={cleaning}
-          className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl flex items-center space-x-1.5 transition-colors cursor-pointer shrink-0"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-          <span>{cleaning ? '正在清理...' : '清空缓存'}</span>
-        </button>
-      </div>
-    </div>
+          <form onSubmit={handleUpdatePassword} className="flex flex-col gap-4 max-w-lg">
+            <MdTextField
+              label="当前旧密码"
+              type="password"
+              placeholder="请输入当前密码 (默认: admin123)"
+              value={oldPassword}
+              onChange={(e) => setOldPassword(e.target.value)}
+              required
+            />
+
+            <MdTextField
+              label="新密码 (不少于 6 位)"
+              type="password"
+              placeholder="请输入新密码"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              required
+            />
+
+            <MdTextField
+              label="确认新密码"
+              type="password"
+              placeholder="请再次输入新密码"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+            />
+
+            {pwdSuccess && (
+              <div className="p-3.5 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-semibold border border-emerald-500/20">
+                {pwdSuccess}
+              </div>
+            )}
+            {pwdError && (
+              <div className="p-3.5 rounded-2xl bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-semibold border border-rose-500/20">
+                {pwdError}
+              </div>
+            )}
+
+            <div className="flex justify-start pt-2">
+              <MdButton
+                type="submit"
+                variant="tonal"
+                size="md"
+                loading={pwdLoading}
+                icon={<Lock className="w-4 h-4" />}
+              >
+                更新管理员密码
+              </MdButton>
+            </div>
+          </form>
+        </MdCard>
+      </motion.div>
+
+      {/* 3. Cache & Maintenance */}
+      <motion.div variants={itemVariants}>
+        <MdCard variant="filled" className="p-6 sm:p-8">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2.5 rounded-2xl bg-amber-500/10 text-amber-600 dark:text-amber-400">
+              <Trash2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-[var(--md-on-surface)]">系统缓存与维护</h3>
+              <p className="text-xs text-[var(--md-on-surface-variant)]">一键清空直链播放嗅探缓存与未持久化的临时元数据</p>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mt-4 p-4 rounded-2xl bg-[var(--md-surface-container)]/70 border border-[var(--md-outline-variant)]/50">
+            <div>
+              <span className="text-sm font-semibold text-[var(--md-on-surface)]">重置并清理流嗅探缓存</span>
+              <p className="text-xs text-[var(--md-on-surface-variant)]">用于强制重新抓取最新视频流与排查失效源</p>
+            </div>
+
+            <MdButton
+              variant="tonal"
+              size="md"
+              loading={cleaning}
+              onClick={handleCleanCache}
+              icon={<Trash2 className="w-4 h-4" />}
+            >
+              立即清理
+            </MdButton>
+          </div>
+
+          {cleanMsg && (
+            <div className="mt-3 p-3 rounded-2xl bg-[var(--md-primary-container)] text-[var(--md-on-primary-container)] text-xs font-semibold">
+              {cleanMsg}
+            </div>
+          )}
+        </MdCard>
+      </motion.div>
+    </motion.div>
   )
 }

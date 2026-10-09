@@ -156,8 +156,34 @@ func (s *DB) initSchema() error {
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
+	CREATE TABLE IF NOT EXISTS admin_account (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		username TEXT NOT NULL UNIQUE,
+		password_hash TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS audit_logs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		event_type TEXT NOT NULL,
+		ip_address TEXT DEFAULT '',
+		user_agent TEXT DEFAULT '',
+		details TEXT DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS ip_bans (
+		ip TEXT PRIMARY KEY,
+		reason TEXT DEFAULT '',
+		banned_until DATETIME,
+		failed_attempts INTEGER DEFAULT 0,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_tokens_user ON user_tokens(user_id);
 	CREATE INDEX IF NOT EXISTS idx_histories_user ON playback_histories(user_id);
+	CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC);
 	`
 
 	if _, err := s.db.Exec(schema); err != nil {
@@ -1026,6 +1052,220 @@ func (s *DB) DeleteSubjectAliases(subjectId int) error {
 	defer s.mu.Unlock()
 
 	_, err := s.db.Exec(`DELETE FROM subject_aliases WHERE subject_id = ?`, subjectId)
+	return err
+}
+
+// -------------------------------------------------------------
+// Admin Account & Security Management
+// -------------------------------------------------------------
+
+type AdminAccount struct {
+	ID           int       `json:"id"`
+	Username     string    `json:"username"`
+	PasswordHash string    `json:"-"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+}
+
+type AuditLogRecord struct {
+	ID        int       `json:"id"`
+	EventType string    `json:"eventType"` // "login_success", "login_failed", "rule_updated", "config_changed", "ip_banned", "ip_unbanned"
+	IPAddress string    `json:"ipAddress"`
+	UserAgent string    `json:"userAgent"`
+	Details   string    `json:"details"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type IPBanRecord struct {
+	IP             string     `json:"ip"`
+	Reason         string     `json:"reason"`
+	BannedUntil    *time.Time `json:"bannedUntil"`
+	FailedAttempts int        `json:"failedAttempts"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+}
+
+func (s *DB) GetAdminAccount() (*AdminAccount, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var acc AdminAccount
+	err := s.db.QueryRow(`SELECT id, username, password_hash, created_at, updated_at FROM admin_account ORDER BY id ASC LIMIT 1`).
+		Scan(&acc.ID, &acc.Username, &acc.PasswordHash, &acc.CreatedAt, &acc.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &acc, nil
+}
+
+func (s *DB) EnsureDefaultAdmin(username, passwordHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM admin_account`).Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		now := time.Now()
+		_, err := s.db.Exec(`INSERT INTO admin_account (username, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+			username, passwordHash, now, now)
+		return err
+	}
+	return nil
+}
+
+func (s *DB) UpdateAdminPassword(username, newPasswordHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	_, err := s.db.Exec(`UPDATE admin_account SET password_hash = ?, updated_at = ? WHERE username = ?`,
+		newPasswordHash, now, username)
+	return err
+}
+
+func (s *DB) RecordAuditLog(eventType, ip, userAgent, details string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`INSERT INTO audit_logs (event_type, ip_address, user_agent, details, created_at) VALUES (?, ?, ?, ?, ?)`,
+		eventType, ip, userAgent, details, time.Now())
+	return err
+}
+
+func (s *DB) GetAuditLogs(limit, offset int) ([]AuditLogRecord, int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var total int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM audit_logs`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	rows, err := s.db.Query(`SELECT id, event_type, ip_address, user_agent, details, created_at FROM audit_logs ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var logs []AuditLogRecord
+	for rows.Next() {
+		var log AuditLogRecord
+		if err := rows.Scan(&log.ID, &log.EventType, &log.IPAddress, &log.UserAgent, &log.Details, &log.CreatedAt); err == nil {
+			logs = append(logs, log)
+		}
+	}
+	return logs, total, nil
+}
+
+func (s *DB) ClearAuditLogs() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`DELETE FROM audit_logs`)
+	return err
+}
+
+func (s *DB) IsIPBanned(ip string) (bool, *time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var bannedUntil sql.NullTime
+	err := s.db.QueryRow(`SELECT banned_until FROM ip_bans WHERE ip = ?`, ip).Scan(&bannedUntil)
+	if err == sql.ErrNoRows {
+		return false, nil, nil
+	}
+	if err != nil {
+		return false, nil, err
+	}
+
+	if bannedUntil.Valid {
+		if bannedUntil.Time.After(time.Now()) {
+			return true, &bannedUntil.Time, nil
+		}
+		// Lazy cleanup: ban duration expired, auto-purge entry
+		_, _ = s.db.Exec(`DELETE FROM ip_bans WHERE ip = ?`, ip)
+	}
+	return false, nil, nil
+}
+
+func (s *DB) RecordFailedLogin(ip string, maxAttempts int, banDuration time.Duration) (int, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	var attempts int
+	var bannedUntil sql.NullTime
+	var updatedAt time.Time
+
+	err := s.db.QueryRow(`SELECT failed_attempts, banned_until, updated_at FROM ip_bans WHERE ip = ?`, ip).Scan(&attempts, &bannedUntil, &updatedAt)
+	if err == sql.ErrNoRows || (err == nil && now.Sub(updatedAt) > banDuration && !bannedUntil.Valid) {
+		// Fresh attempt or previous non-banned attempts aged out (> 15 mins)
+		attempts = 1
+		_, err = s.db.Exec(`INSERT OR REPLACE INTO ip_bans (ip, reason, failed_attempts, updated_at) VALUES (?, 'Failed login attempt', 1, ?)`, ip, now)
+		return 1, false, err
+	} else if err != nil {
+		return 0, false, err
+	}
+
+	attempts++
+	isBanned := false
+	if attempts >= maxAttempts {
+		isBanned = true
+		banTime := now.Add(banDuration)
+		_, err = s.db.Exec(`UPDATE ip_bans SET failed_attempts = ?, banned_until = ?, reason = 'Excessive failed login attempts', updated_at = ? WHERE ip = ?`,
+			attempts, banTime, now, ip)
+	} else {
+		_, err = s.db.Exec(`UPDATE ip_bans SET failed_attempts = ?, updated_at = ? WHERE ip = ?`, attempts, now, ip)
+	}
+
+	return attempts, isBanned, err
+}
+
+func (s *DB) ClearFailedLogin(ip string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`DELETE FROM ip_bans WHERE ip = ?`, ip)
+	return err
+}
+
+func (s *DB) GetBannedIPs() ([]IPBanRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(`SELECT ip, reason, banned_until, failed_attempts, updated_at FROM ip_bans ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []IPBanRecord
+	for rows.Next() {
+		var rec IPBanRecord
+		var bannedUntil sql.NullTime
+		if err := rows.Scan(&rec.IP, &rec.Reason, &bannedUntil, &rec.FailedAttempts, &rec.UpdatedAt); err == nil {
+			if bannedUntil.Valid {
+				rec.BannedUntil = &bannedUntil.Time
+			}
+			list = append(list, rec)
+		}
+	}
+	return list, nil
+}
+
+func (s *DB) UnbanIP(ip string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`DELETE FROM ip_bans WHERE ip = ?`, ip)
 	return err
 }
 

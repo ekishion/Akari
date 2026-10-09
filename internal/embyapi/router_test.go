@@ -35,6 +35,7 @@ func TestSetupRouter(t *testing.T) {
 	defer db.Close()
 
 	authSvc := auth.NewAuthService(cfg, db)
+	adminAuth := auth.NewAdminAuthService(cfg, db)
 	bgmClient := bangumi.NewClient(cfg.BangumiHost)
 	ruleMgr := rules.NewRuleManager(cfg)
 	eng := engine.NewEngine()
@@ -43,7 +44,7 @@ func TestSetupRouter(t *testing.T) {
 	danmakuClient := danmaku.NewClient(cfg.DanDanHost)
 
 	// This should not panic
-	r := SetupRouter(cfg, authSvc, bgmClient, ruleMgr, eng, res, streamProxy, danmakuClient, db)
+	r := SetupRouter(cfg, authSvc, adminAuth, bgmClient, ruleMgr, eng, res, streamProxy, danmakuClient, db)
 	if r == nil {
 		t.Fatal("expected non-nil router")
 	}

@@ -162,8 +162,8 @@ func (h *PlaybackHandler) GetPlaybackInfo(c *gin.Context) {
 		defer cancelSearch()
 
 		queries := engine.GenerateSearchQueries(title, origTitle, cnTitle, isMovie, synonyms, extraAliases...)
-		if len(queries) > 6 {
-			queries = queries[:6]
+		if len(queries) > 12 {
+			queries = queries[:12]
 		}
 		log.Printf("[Playback] Search queries for '%s' (isMovie=%v): %v", title, isMovie, queries)
 

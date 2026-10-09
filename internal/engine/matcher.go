@@ -292,67 +292,65 @@ func GenerateSearchQueries(title, originalTitle, cnTitle string, isMovie bool, s
 		}
 	}
 
-	// If target is a Movie / 剧场版, prioritize movie query variants first
+	cleanTitle := rePunctuation.ReplaceAllString(title, "")
+	cleanOrig := rePunctuation.ReplaceAllString(originalTitle, "")
+	cleanCN := rePunctuation.ReplaceAllString(cnTitle, "")
+
+	// 1. Primary core titles (clean without punctuation & raw)
+	add(cleanTitle)
+	add(title)
+	if cleanCN != "" && cleanCN != cleanTitle {
+		add(cleanCN)
+		add(cnTitle)
+	}
+	if cleanOrig != "" && cleanOrig != cleanTitle && cleanOrig != cleanCN {
+		add(cleanOrig)
+		add(originalTitle)
+	}
+
+	// 2. If target is a Movie / 剧场版, add movie query variants
 	if isMovie {
-		for _, baseT := range []string{title, cnTitle} {
-			if baseT != "" {
-				cleanB := rePunctuation.ReplaceAllString(baseT, "")
-				if !hasFormatWords(cleanB) {
-					add(cleanB + " 电影版")
-					add(cleanB + " 剧场版")
-					add(cleanB + "电影版")
-					add(cleanB + "剧场版")
-					add(cleanB + "大电影")
-					add(cleanB + " 电影")
-				}
+		for _, baseT := range []string{cleanTitle, cleanCN} {
+			if baseT != "" && !hasFormatWords(baseT) {
+				add(baseT + " 剧场版")
+				add(baseT + " 电影版")
+				add(baseT + "剧场版")
+				add(baseT + "电影版")
+				add(baseT + "大电影")
+				add(baseT + " 电影")
 			}
 		}
 	}
 
-	// 1. Raw title, CN title, and original title
-	add(title)
-	add(cnTitle)
-	add(originalTitle)
-
-	// 2. Punctuation stripped
-	cleaned := rePunctuation.ReplaceAllString(title, " ")
-	add(cleaned)
-	noPunct := rePunctuation.ReplaceAllString(title, "")
-	add(noPunct)
-
-	// Also strip punctuation from originalTitle and cnTitle
-	if originalTitle != "" {
-		origCleaned := rePunctuation.ReplaceAllString(originalTitle, " ")
-		add(origCleaned)
-		origNoPunct := rePunctuation.ReplaceAllString(originalTitle, "")
-		add(origNoPunct)
-	}
-	if cnTitle != "" {
-		cnCleaned := rePunctuation.ReplaceAllString(cnTitle, " ")
-		add(cnCleaned)
-		cnNoPunct := rePunctuation.ReplaceAllString(cnTitle, "")
-		add(cnNoPunct)
+	// 3. User & Bangumi Extra Aliases
+	for _, a := range extraAliases {
+		a = strings.TrimSpace(a)
+		if a != "" {
+			add(rePunctuation.ReplaceAllString(a, ""))
+			add(a)
+		}
 	}
 
-	// 3. Spaced alphanumeric title (e.g. "FX战士久留美" -> "FX 战士久留美")
+	// 4. Spaced alphanumeric title (e.g. "FX战士久留美" -> "FX 战士久留美")
 	spaced := reAlphaHan.ReplaceAllString(title, "$1 $2")
 	add(spaced)
 
-	// 4. Base title without format words
-	baseNoFormat := strings.TrimSpace(stripFormatWords(noPunct))
-	if baseNoFormat != "" && baseNoFormat != noPunct {
+	// 5. Base title without format words
+	baseNoFormat := strings.TrimSpace(stripFormatWords(cleanTitle))
+	if baseNoFormat != "" && baseNoFormat != cleanTitle {
 		add(baseNoFormat)
 	}
 
-	// 5. Base title without season suffix
+	// 6. Base title without season suffix
 	reSeasonSuffix := regexp.MustCompile(`(?i)(?:第[0-9一二三四五]季|season\s*[0-9]+|s[0-9]+)$`)
-	base := strings.TrimSpace(reSeasonSuffix.ReplaceAllString(strings.TrimSpace(cleaned), ""))
-	if base != "" && base != cleaned {
+	cleanedWithSpace := rePunctuation.ReplaceAllString(title, " ")
+	base := strings.TrimSpace(reSeasonSuffix.ReplaceAllString(strings.TrimSpace(cleanedWithSpace), ""))
+	if base != "" && base != cleanedWithSpace {
 		add(base)
 		add(rePunctuation.ReplaceAllString(base, ""))
 	}
 
-	// 6. Dynamic Synonym Applications (bidirectional matching and prefix swapping)
+	// 7. Dynamic Synonym Applications (bidirectional matching and prefix swapping)
 	currentSnap := make([]string, len(list))
 	copy(currentSnap, list)
 

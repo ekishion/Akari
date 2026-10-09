@@ -136,7 +136,13 @@ func TestGenerateSearchQueries(t *testing.T) {
 
 	movieQueries := GenerateSearchQueries("罗小黑战记", "", "罗小黑战记", true, synonyms)
 	t.Logf("Queries for 罗小黑战记 (Movie): %v", movieQueries)
-	if len(movieQueries) == 0 || movieQueries[0] != "罗小黑战记 电影版" {
-		t.Errorf("Expected movie queries to prioritize '罗小黑战记 电影版', got %v", movieQueries)
+	if len(movieQueries) == 0 || movieQueries[0] != "罗小黑战记" {
+		t.Errorf("Expected movie queries to have '罗小黑战记' as primary query, got %v", movieQueries)
+	}
+
+	kaguyaQueries := GenerateSearchQueries("超辉夜姬！", "超かぐや姫！", "超辉夜姬！", true, synonyms)
+	t.Logf("Queries for 超辉夜姬！ (Movie): %v", kaguyaQueries)
+	if len(kaguyaQueries) == 0 || kaguyaQueries[0] != "超辉夜姬" {
+		t.Errorf("Expected kaguya queries to have '超辉夜姬' as first query, got %v", kaguyaQueries)
 	}
 }

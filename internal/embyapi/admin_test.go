@@ -43,6 +43,7 @@ func TestAdminRouter_Integration(t *testing.T) {
 	defer db.Close()
 
 	authSvc := auth.NewAuthService(cfg, db)
+	adminAuth := auth.NewAdminAuthService(cfg, db)
 	bgmClient := bangumi.NewClient(cfg.BangumiHost)
 	danmakuClient := danmaku.NewClient(cfg.DanDanHost)
 	ruleMgr := rules.NewRuleManager(cfg)
@@ -50,10 +51,35 @@ func TestAdminRouter_Integration(t *testing.T) {
 	res := resolver.NewStreamResolver()
 	streamProxy := proxy.NewStreamProxy(cfg, db)
 
-	router := SetupRouter(cfg, authSvc, bgmClient, ruleMgr, eng, res, streamProxy, danmakuClient, db)
+	router := SetupRouter(cfg, authSvc, adminAuth, bgmClient, ruleMgr, eng, res, streamProxy, danmakuClient, db)
 
-	// 1. Test /api/system/status
+	// 1. Test unauthorized access to protected endpoint returns 401
+	reqUnauth := httptest.NewRequest(http.MethodGet, "/api/system/status", nil)
+	wUnauth := httptest.NewRecorder()
+	router.ServeHTTP(wUnauth, reqUnauth)
+	if wUnauth.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthorized /api/system/status, got %d", wUnauth.Code)
+	}
+
+	// 2. Test Admin Login
+	loginBody := `{"username":"admin","password":"admin123"}`
+	reqLogin := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(loginBody))
+	reqLogin.Header.Set("Content-Type", "application/json")
+	wLogin := httptest.NewRecorder()
+	router.ServeHTTP(wLogin, reqLogin)
+	if wLogin.Code != http.StatusOK {
+		t.Fatalf("expected 200 for /api/auth/login, got %d: %s", wLogin.Code, wLogin.Body.String())
+	}
+	var loginResp map[string]any
+	_ = json.Unmarshal(wLogin.Body.Bytes(), &loginResp)
+	token, _ := loginResp["token"].(string)
+	if token == "" {
+		t.Fatalf("expected non-empty token from login")
+	}
+
+	// 3. Test /api/system/status with Bearer token
 	reqStatus := httptest.NewRequest(http.MethodGet, "/api/system/status", nil)
+	reqStatus.Header.Set("Authorization", "Bearer "+token)
 	wStatus := httptest.NewRecorder()
 	router.ServeHTTP(wStatus, reqStatus)
 	if wStatus.Code != http.StatusOK {
@@ -68,16 +94,18 @@ func TestAdminRouter_Integration(t *testing.T) {
 		t.Errorf("unexpected serverName: %v", statusBody["serverName"])
 	}
 
-	// 2. Test /api/rules
+	// 4. Test /api/rules with Bearer token
 	reqRules := httptest.NewRequest(http.MethodGet, "/api/rules", nil)
+	reqRules.Header.Set("Authorization", "Bearer "+token)
 	wRules := httptest.NewRecorder()
 	router.ServeHTTP(wRules, reqRules)
 	if wRules.Code != http.StatusOK {
 		t.Fatalf("expected 200 for /api/rules, got %d", wRules.Code)
 	}
 
-	// 3. Test /api/users
+	// 5. Test /api/users with Bearer token
 	reqUsers := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	reqUsers.Header.Set("Authorization", "Bearer "+token)
 	wUsers := httptest.NewRecorder()
 	router.ServeHTTP(wUsers, reqUsers)
 	if wUsers.Code != http.StatusOK {
@@ -134,6 +162,7 @@ func TestAdminRouter_Integration(t *testing.T) {
 	updatePayload := `{"bangumiHost": "https://mirror.bgm.rin.cat", "dandanHost": "https://ddplay.retr0.xyz", "serverName": "Akari Rebranded"}`
 	reqUpd := httptest.NewRequest(http.MethodPost, "/api/system/config", strings.NewReader(updatePayload))
 	reqUpd.Header.Set("Content-Type", "application/json")
+	reqUpd.Header.Set("Authorization", "Bearer "+token)
 	wUpd := httptest.NewRecorder()
 	router.ServeHTTP(wUpd, reqUpd)
 	if wUpd.Code != http.StatusOK {
@@ -156,6 +185,7 @@ func TestAdminRouter_Integration(t *testing.T) {
 	testPayload := `{"url": "invalid-url://example.com"}`
 	reqTest := httptest.NewRequest(http.MethodPost, "/api/system/bangumi/test", strings.NewReader(testPayload))
 	reqTest.Header.Set("Content-Type", "application/json")
+	reqTest.Header.Set("Authorization", "Bearer "+token)
 	wTest := httptest.NewRecorder()
 	router.ServeHTTP(wTest, reqTest)
 	if wTest.Code != http.StatusOK {

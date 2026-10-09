@@ -73,15 +73,6 @@ export interface RulePlugin {
   adBlocker?: boolean
 }
 
-export interface PlaybackHistory {
-  userId: string
-  itemId: string
-  positionTicks: number
-  totalTicks: number
-  played: boolean
-  playCount: number
-  lastPlayedDate: string | null
-}
 
 export interface TestResult {
   success: boolean
@@ -125,5 +116,46 @@ export interface SubjectAlias {
   aliases: string[]
   updatedAt: string
 }
+
+export interface AdminAuthResponse {
+  token: string
+  expiresAt: string
+  username: string
+}
+
+export interface AdminProfile {
+  username: string
+  role: string
+}
+
+export interface AuditLog {
+  id: number
+  eventType: string
+  ipAddress: string
+  userAgent: string
+  details: string
+  createdAt: string
+}
+
+export interface IPBan {
+  ip: string
+  reason: string
+  bannedUntil?: string
+  failedAttempts: number
+  updatedAt: string
+}
+
+export interface TelemetryEvent {
+  timestamp: string
+  uptimeSeconds: number
+  goroutines: number
+  memoryAllocMB: number
+  memorySysMB: number
+  activeSessions: number
+  totalRules: number
+  enabledRules: number
+  recentLog?: string
+}
+
 
 

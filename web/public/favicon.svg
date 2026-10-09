@@ -1,0 +1,60 @@
+<svg width="128" height="128" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Dark Background -->
+    <linearGradient id="fav-bg-dark" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1E1B4B" />
+      <stop offset="50%" stop-color="#0F172A" />
+      <stop offset="100%" stop-color="#310D20" />
+    </linearGradient>
+
+    <!-- Light Background -->
+    <linearGradient id="fav-bg-light" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#EEF2FF" />
+      <stop offset="55%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#FCE7F3" />
+    </linearGradient>
+
+    <!-- Bridge Gradient -->
+    <linearGradient id="fav-bridge" x1="10" y1="90" x2="90" y2="10" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366F1" />
+      <stop offset="45%" stop-color="#8B5CF6" />
+      <stop offset="100%" stop-color="#EC4899" />
+    </linearGradient>
+
+    <!-- Play Vector Gradient -->
+    <linearGradient id="fav-play" x1="30" y1="20" x2="85" y2="75" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FB7185" />
+      <stop offset="40%" stop-color="#F43F5E" />
+      <stop offset="85%" stop-color="#7C3AED" />
+      <stop offset="100%" stop-color="#4F46E5" />
+    </linearGradient>
+
+    <!-- Flow Gradient -->
+    <linearGradient id="fav-flow" x1="20" y1="50" x2="85" y2="50" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.9" />
+      <stop offset="50%" stop-color="#F43F5E" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#FBBF24" stop-opacity="0.9" />
+    </linearGradient>
+  </defs>
+
+  <style>
+    .akari-fav-bg { fill: url(#fav-bg-dark); }
+    .akari-fav-stroke { stroke: rgba(255, 255, 255, 0.16); }
+    @media (prefers-color-scheme: light) {
+      .akari-fav-bg { fill: url(#fav-bg-light); }
+      .akari-fav-stroke { stroke: rgba(99, 102, 241, 0.22); }
+    }
+  </style>
+
+  <rect x="2" y="2" width="96" height="96" rx="26" class="akari-fav-bg" />
+  <rect x="2" y="2" width="96" height="96" rx="26" class="akari-fav-stroke" stroke-width="1.5" />
+
+  <path d="M 22 75 C 20 48, 42 25, 68 25 C 75 25, 82 28, 86 32 C 83 35, 76 32, 68 32 C 48 32, 29 50, 30 75 C 30 78, 22 78, 22 75 Z" fill="url(#fav-bridge)" opacity="0.95" />
+  <path d="M 26 78 C 38 78, 54 74, 68 64 C 71 61, 74 64, 72 68 C 58 80, 42 86, 26 86 C 22 86, 22 78, 26 78 Z" fill="url(#fav-flow)" opacity="0.8" />
+  <path d="M 38 30 C 38 26.5, 41.8 24.5, 44.8 26.3 L 74.5 44.5 C 77.2 46.2, 77.2 50.8, 74.5 52.5 L 44.8 70.7 C 41.8 72.5, 38 70.5, 38 67 Z" fill="url(#fav-play)" />
+  <path d="M 38 30 L 74.5 44.5 L 48 54 Z" fill="white" opacity="0.28" />
+
+  <path d="M 68 18 Q 68 27 59 27 Q 68 27 68 36 Q 68 27 77 27 Q 68 27 68 18 Z" fill="#FFFFFF" />
+  <circle cx="68" cy="27" r="1.8" fill="#FEF08A" />
+  <path d="M 30 38 Q 30 42 26 42 Q 30 42 30 46 Q 30 42 34 42 Q 30 42 30 38 Z" fill="#FDE047" opacity="0.9" />
+</svg>

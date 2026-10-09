@@ -56,6 +56,7 @@ func main() {
 
 	// 4. Initialize Services
 	authSvc := auth.NewAuthService(cfg, db)
+	adminAuth := auth.NewAdminAuthService(cfg, db)
 	bgmClient := bangumi.NewClient(cfg.BangumiHost)
 	danmakuClient := danmaku.NewClient(cfg.DanDanHost)
 	ruleMgr := rules.NewRuleManager(cfg)
@@ -68,7 +69,7 @@ func main() {
 	log.Printf("[Init] SQLite storage initialized in %s", cfg.DataDir)
 
 	// 4. Setup Router
-	router := embyapi.SetupRouter(cfg, authSvc, bgmClient, ruleMgr, eng, res, streamProxy, danmakuClient, db)
+	router := embyapi.SetupRouter(cfg, authSvc, adminAuth, bgmClient, ruleMgr, eng, res, streamProxy, danmakuClient, db)
 
 	// 5. Start HTTP Server
 	serverAddr := fmt.Sprintf("0.0.0.0:%d", cfg.HttpPort)

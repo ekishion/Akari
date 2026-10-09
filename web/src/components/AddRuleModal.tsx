@@ -1,6 +1,9 @@
 import React, { useState } from 'react'
-import { X, Code, Download, Plus, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { Code, Download, Plus, AlertCircle, CheckCircle2, Globe, Sparkles } from 'lucide-react'
 import { api } from '../api'
+import { MdDialog } from './md3/MdDialog'
+import { MdButton } from './md3/MdButton'
+import { MdTextField } from './md3/MdTextField'
 
 interface AddRuleModalProps {
   isOpen: boolean
@@ -9,14 +12,12 @@ interface AddRuleModalProps {
 }
 
 export const AddRuleModal: React.FC<AddRuleModalProps> = ({ isOpen, onClose, onSuccess }) => {
-  const [mode, setMode] = useState<'json' | 'url'>('url')
+  const [mode, setMode] = useState<'url' | 'json'>('url')
   const [jsonText, setJsonText] = useState('')
   const [url, setUrl] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
-
-  if (!isOpen) return null
 
   const handleImport = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -35,7 +36,7 @@ export const AddRuleModal: React.FC<AddRuleModalProps> = ({ isOpen, onClose, onS
         }, 1000)
       } else {
         if (!jsonText.trim()) throw new Error('请输入 Kazumi 规则 JSON 内容')
-        let parsed
+        let parsed: any
         try {
           parsed = JSON.parse(jsonText)
         } catch {
@@ -72,166 +73,149 @@ export const AddRuleModal: React.FC<AddRuleModalProps> = ({ isOpen, onClose, onS
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
-      <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/50">
-          <div className="flex items-center space-x-2">
-            <div className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold">
-              <Plus className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-base font-semibold text-white">添加 / 导入 Kazumi 解析规则</h3>
-              <p className="text-xs text-slate-400">支持直接粘贴 Kazumi JSON 格式或通过远程订阅链接批量导入</p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+    <MdDialog
+      open={isOpen}
+      onClose={onClose}
+      title="添加 / 导入 Kazumi 解析规则"
+      subtitle="支持直接粘贴 Kazumi JSON 规则格式，或通过远程订阅链接批量导入源站规则仓库。"
+      icon={<Plus className="w-5 h-5 text-[var(--md-primary)]" />}
+      maxWidth="2xl"
+      actions={
+        <>
+          <MdButton variant="text" onClick={onClose}>
+            取消
+          </MdButton>
+          <MdButton
+            variant="filled"
+            onClick={handleImport}
+            disabled={loading}
+            loading={loading}
           >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+            {loading ? '正在处理...' : '确认导入'}
+          </MdButton>
+        </>
+      }
+    >
+      <div className="space-y-5">
+        {/* Mode Switcher Pills */}
 
-        {/* Tabs */}
-        <div className="flex border-b border-slate-800 bg-slate-900 px-6 pt-3 gap-4">
+        {/* Mode Switcher Pills */}
+        <div className="flex p-1 bg-[var(--md-surface-container-low)] dark:bg-[var(--md-surface-container)] rounded-full border border-[var(--md-outline-variant)]">
           <button
+            type="button"
             onClick={() => setMode('url')}
-            className={`pb-3 text-sm font-medium flex items-center space-x-2 border-b-2 transition-colors ${
+            className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-semibold rounded-full transition-all duration-200 cursor-pointer ${
               mode === 'url'
-                ? 'border-pink-500 text-pink-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
+                ? 'bg-[var(--md-primary-container)] text-[var(--md-on-primary-container)] shadow-sm'
+                : 'text-[var(--md-on-surface-variant)] hover:text-[var(--md-on-surface)]'
             }`}
           >
             <Download className="w-4 h-4" />
-            <span>远程订阅 / URL 导入</span>
+            <span>远程订阅 / URL 批量导入</span>
           </button>
           <button
+            type="button"
             onClick={() => setMode('json')}
-            className={`pb-3 text-sm font-medium flex items-center space-x-2 border-b-2 transition-colors ${
+            className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-semibold rounded-full transition-all duration-200 cursor-pointer ${
               mode === 'json'
-                ? 'border-pink-500 text-pink-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
+                ? 'bg-[var(--md-primary-container)] text-[var(--md-on-primary-container)] shadow-sm'
+                : 'text-[var(--md-on-surface-variant)] hover:text-[var(--md-on-surface)]'
             }`}
           >
             <Code className="w-4 h-4" />
-            <span>手动 JSON 输入</span>
+            <span>手动 JSON 规则输入</span>
           </button>
         </div>
 
-        {/* Form Body */}
-        <form onSubmit={handleImport} className="p-6 overflow-y-auto space-y-4 flex-1">
-          {error && (
-            <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs flex items-center space-x-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
+        {/* Status Alerts */}
+        {error && (
+          <div className="p-3.5 rounded-2xl bg-[var(--md-danger)]/10 border border-[var(--md-danger)]/20 text-[var(--md-danger)] text-xs flex items-center gap-2.5 animate-fade-in">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
 
-          {successMsg && (
-            <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs flex items-center space-x-2">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              <span>{successMsg}</span>
-            </div>
-          )}
+        {successMsg && (
+          <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs flex items-center gap-2.5 animate-fade-in">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{successMsg}</span>
+          </div>
+        )}
 
-          {mode === 'url' ? (
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
-                  规则订阅 URL
-                </label>
-                <input
-                  type="url"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://raw.githubusercontent.com/.../plugins.json"
-                  className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-pink-500 transition-colors"
-                />
+        {/* Mode Body */}
+        {mode === 'url' ? (
+          <div className="space-y-4">
+            <MdTextField
+              label="规则订阅 URL"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://raw.githubusercontent.com/.../plugins.json"
+              leadingIcon={<Globe className="w-4 h-4" />}
+            />
+
+            {/* Presets */}
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--md-on-surface-variant)] px-1">
+                <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                <span>常用 Kazumi 规则预设仓库</span>
               </div>
-
-              {/* Preset Links */}
-              <div>
-                <div className="text-xs font-medium text-slate-400 mb-2">常用 Kazumi 规则预设仓库:</div>
-                <div className="space-y-2">
+              <div className="grid grid-cols-1 gap-2">
+                {[
+                  {
+                    title: 'Predidit/KazumiRules (jsDelivr 全球 CDN 加速)',
+                    url: 'https://fastly.jsdelivr.net/gh/Predidit/KazumiRules@main/index.json',
+                    desc: '推荐：国内及海外高速直连',
+                  },
+                  {
+                    title: 'Predidit/KazumiRules (GitHub 官方源)',
+                    url: 'https://raw.githubusercontent.com/Predidit/KazumiRules/main/index.json',
+                    desc: '官方实时同步源（需要国际网络）',
+                  },
+                  {
+                    title: 'Predidit/KazumiRules (GHProxy 国内镜像加速)',
+                    url: 'https://ghproxy.net/https://raw.githubusercontent.com/Predidit/KazumiRules/main/index.json',
+                    desc: '镜像代理节点加速',
+                  },
+                ].map((preset, idx) => (
                   <button
+                    key={idx}
                     type="button"
-                    onClick={() =>
-                      handleSetPreset('https://fastly.jsdelivr.net/gh/Predidit/KazumiRules@main/index.json')
-                    }
-                    className="w-full text-left p-2.5 bg-slate-950/60 border border-slate-800 hover:border-pink-500/40 rounded-xl text-xs flex items-center justify-between text-slate-300 transition-colors cursor-pointer"
+                    onClick={() => handleSetPreset(preset.url)}
+                    className="w-full text-left p-3.5 bg-[var(--md-surface-container-low)] dark:bg-[var(--md-surface-container)] border border-[var(--md-outline-variant)] hover:border-[var(--md-primary)] rounded-2xl flex items-center justify-between gap-3 transition-all duration-200 cursor-pointer group"
                   >
-                    <div>
-                      <div className="font-medium text-slate-200">Predidit/KazumiRules (jsDelivr 全球加速)</div>
-                      <div className="text-[11px] text-slate-500 font-mono">@main/index.json</div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-semibold text-[var(--md-on-surface)] group-hover:text-[var(--md-primary)] transition-colors">
+                        {preset.title}
+                      </div>
+                      <div className="text-[11px] text-[var(--md-on-surface-variant)]/70 font-mono truncate mt-0.5">
+                        {preset.url}
+                      </div>
                     </div>
-                    <span className="text-pink-400 font-mono text-[11px]">点击填入</span>
+                    <span className="text-xs font-medium text-[var(--md-primary)] bg-[var(--md-primary-container)]/40 px-2.5 py-1 rounded-full shrink-0">
+                      填入
+                    </span>
                   </button>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      handleSetPreset('https://raw.githubusercontent.com/Predidit/KazumiRules/main/index.json')
-                    }
-                    className="w-full text-left p-2.5 bg-slate-950/60 border border-slate-800 hover:border-pink-500/40 rounded-xl text-xs flex items-center justify-between text-slate-300 transition-colors cursor-pointer"
-                  >
-                    <div>
-                      <div className="font-medium text-slate-200">Predidit/KazumiRules (GitHub 官方源)</div>
-                      <div className="text-[11px] text-slate-500 font-mono">main/index.json</div>
-                    </div>
-                    <span className="text-pink-400 font-mono text-[11px]">点击填入</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      handleSetPreset('https://ghproxy.net/https://raw.githubusercontent.com/Predidit/KazumiRules/main/index.json')
-                    }
-                    className="w-full text-left p-2.5 bg-slate-950/60 border border-slate-800 hover:border-pink-500/40 rounded-xl text-xs flex items-center justify-between text-slate-300 transition-colors cursor-pointer"
-                  >
-                    <div>
-                      <div className="font-medium text-slate-200">Predidit/KazumiRules (GHProxy 国内镜像)</div>
-                      <div className="text-[11px] text-slate-500 font-mono">ghproxy.net 镜像代理</div>
-                    </div>
-                    <span className="text-pink-400 font-mono text-[11px]">点击填入</span>
-                  </button>
-                </div>
+                ))}
               </div>
             </div>
-          ) : (
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
-                Kazumi 规则 JSON (单条对象或数组)
-              </label>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold text-[var(--md-on-surface-variant)] px-1">
+              Kazumi 规则 JSON 内容 (单条对象或规则数组)
+            </label>
+            <div className="bg-[var(--md-surface-container-low)] dark:bg-[var(--md-surface-container)] rounded-2xl border border-[var(--md-outline-variant)] p-3 focus-within:ring-2 focus-within:ring-[var(--md-primary)]">
               <textarea
-                rows={10}
+                rows={9}
                 value={jsonText}
                 onChange={(e) => setJsonText(e.target.value)}
                 placeholder={`{\n  "name": "极速动漫",\n  "version": "1.2",\n  "api": "8",\n  "type": "anime",\n  "baseURL": "https://m.ezdmw.org/",\n  "searchMode": "xpath"\n}`}
-                className="w-full font-mono text-xs p-4 bg-slate-950 border border-slate-700 rounded-xl text-slate-200 placeholder-slate-600 focus:outline-none focus:border-pink-500 transition-colors leading-relaxed"
+                className="w-full font-mono text-xs bg-transparent text-[var(--md-on-surface)] placeholder:text-[var(--md-on-surface-variant)]/40 outline-none leading-relaxed resize-none"
               />
             </div>
-          )}
-
-          {/* Footer */}
-          <div className="flex justify-end space-x-3 pt-4 border-t border-slate-800">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-xl transition-colors cursor-pointer"
-            >
-              取消
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-5 py-2 bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white text-sm font-medium rounded-xl transition-all shadow-md shadow-pink-500/20 disabled:opacity-50 cursor-pointer"
-            >
-              {loading ? '正在处理...' : '确认导入'}
-            </button>
           </div>
-        </form>
+        )}
       </div>
-    </div>
+    </MdDialog>
   )
 }

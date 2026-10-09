@@ -20,6 +20,7 @@ import (
 func SetupRouter(
 	cfg *config.Config,
 	authSvc *auth.AuthService,
+	adminAuth *auth.AdminAuthService,
 	bgmClient *bangumi.Client,
 	ruleMgr *rules.RuleManager,
 	eng *engine.Engine,
@@ -33,28 +34,18 @@ func SetupRouter(
 	r.Use(gin.Recovery())
 	r.Use(gin.Logger())
 
-	// 1. Global CORS Middleware
-	r.Use(func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD")
-		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, X-Emby-Token, X-Emby-Authorization, X-MediaBrowser-Token")
-		c.Header("Access-Control-Expose-Headers", "Content-Length, Content-Range")
-		c.Header("Access-Control-Allow-Credentials", "true")
-
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(http.StatusNoContent)
-			return
-		}
-		c.Next()
-	})
-
+	playbackHandler := NewPlaybackHandler(cfg, bgmClient, ruleMgr, eng, res, danmakuClient, db)
+	adminHandler := NewAdminHandler(cfg, authSvc, ruleMgr, eng, bgmClient, playbackHandler, db)
+	adminSecHandler := NewAdminSecurityHandler(cfg, db, adminAuth, ruleMgr, playbackHandler)
 	sysHandler := NewSystemHandler(cfg)
 	usersHandler := NewUsersHandler(authSvc, db)
 	viewsHandler := NewViewsHandler(cfg)
 	itemsHandler := NewItemsHandler(cfg, bgmClient, authSvc, db)
-	playbackHandler := NewPlaybackHandler(cfg, bgmClient, ruleMgr, eng, res, danmakuClient, db)
-	adminHandler := NewAdminHandler(cfg, authSvc, ruleMgr, eng, bgmClient, playbackHandler, db)
 	wsHandler := NewWebSocketHandler()
+	authMiddleware := authSvc.Middleware()
+
+	// 1. Global Security Headers & CORS Middleware
+	r.Use(adminSecHandler.SecurityHeadersMiddleware())
 
 	// WebSocket Endpoints
 	r.GET("/embywebsocket", wsHandler.HandleWebSocket)
@@ -66,55 +57,67 @@ func SetupRouter(
 	r.GET("/stream/segment", streamProxy.HandleSegment)
 	r.HEAD("/stream/segment", streamProxy.HandleSegment)
 
-	// Auth Middleware
-	authMiddleware := authSvc.Middleware()
-
 	// 2. Admin Web APIs (/api/...)
 	apiGroup := r.Group("/api")
 	{
 		// Public Auth
-		apiGroup.POST("/auth/login", adminHandler.Login)
-		apiGroup.GET("/auth/me", authMiddleware, adminHandler.GetMe)
-		apiGroup.POST("/auth/change-password", authMiddleware, adminHandler.ChangePassword)
+		apiGroup.POST("/auth/login", adminSecHandler.Login)
+		apiGroup.GET("/events", adminSecHandler.EventsStream)
 
-		// System
-		apiGroup.GET("/system/status", adminHandler.GetStatus)
-		apiGroup.GET("/system/config", adminHandler.GetConfig)
-		apiGroup.POST("/system/config", adminHandler.UpdateConfig)
-		apiGroup.PUT("/system/config", adminHandler.UpdateConfig)
-		apiGroup.POST("/system/clean-cache", adminHandler.CleanCache)
-		apiGroup.POST("/system/bangumi/test", adminHandler.TestBangumiEndpoint)
+		// Protected Admin Routes
+		protected := apiGroup.Group("")
+		protected.Use(adminSecHandler.AdminAuthMiddleware())
+		{
+			// Admin Profile & Password
+			protected.POST("/auth/logout", adminSecHandler.Logout)
+			protected.GET("/auth/me", adminSecHandler.GetProfile)
+			protected.POST("/auth/change-password", adminSecHandler.ChangePassword)
 
-		// Users
-		apiGroup.GET("/users", adminHandler.ListUsers)
-		apiGroup.POST("/users", adminHandler.CreateUser)
-		apiGroup.DELETE("/users/:id", adminHandler.DeleteUser)
-		apiGroup.GET("/users/:id/tokens", adminHandler.GetUserTokens)
-		apiGroup.POST("/users/:id/tokens", adminHandler.CreateUserToken)
-		apiGroup.DELETE("/users/:id/tokens/:token", adminHandler.RevokeUserToken)
-		apiGroup.POST("/users/:id/bangumi", adminHandler.BindUserBangumi)
-		apiGroup.DELETE("/users/:id/bangumi", adminHandler.UnbindUserBangumi)
+			// Security & Audit
+			protected.GET("/security/audit", adminSecHandler.GetAuditLogs)
+			protected.DELETE("/security/audit", adminSecHandler.ClearAuditLogs)
+			protected.GET("/security/bans", adminSecHandler.GetBannedIPs)
+			protected.POST("/security/unban", adminSecHandler.UnbanIP)
 
-		// Rules
-		apiGroup.GET("/rules", adminHandler.ListRules)
-		apiGroup.POST("/rules", adminHandler.SaveRule)
-		apiGroup.PUT("/rules/:name/toggle", adminHandler.ToggleRule)
-		apiGroup.DELETE("/rules/:name", adminHandler.DeleteRule)
-		apiGroup.POST("/rules/import-url", adminHandler.ImportRulesFromURL)
-		apiGroup.POST("/rules/test", adminHandler.TestRule)
+			// System
+			protected.GET("/system/status", adminHandler.GetStatus)
+			protected.GET("/system/config", adminHandler.GetConfig)
+			protected.POST("/system/config", adminHandler.UpdateConfig)
+			protected.PUT("/system/config", adminHandler.UpdateConfig)
+			protected.POST("/system/clean-cache", adminHandler.CleanCache)
+			protected.POST("/system/bangumi/test", adminHandler.TestBangumiEndpoint)
 
-		// Aliases & Synonyms
-		apiGroup.GET("/aliases/synonyms", adminHandler.ListGlobalSynonyms)
-		apiGroup.POST("/aliases/synonyms", adminHandler.UpsertGlobalSynonym)
-		apiGroup.DELETE("/aliases/synonyms/:pattern", adminHandler.DeleteGlobalSynonym)
-		apiGroup.POST("/aliases/synonyms/reset", adminHandler.ResetGlobalSynonyms)
+			// Users
+			protected.GET("/users", adminHandler.ListUsers)
+			protected.POST("/users", adminHandler.CreateUser)
+			protected.DELETE("/users/:id", adminHandler.DeleteUser)
+			protected.GET("/users/:id/tokens", adminHandler.GetUserTokens)
+			protected.POST("/users/:id/tokens", adminHandler.CreateUserToken)
+			protected.DELETE("/users/:id/tokens/:token", adminHandler.RevokeUserToken)
+			protected.POST("/users/:id/bangumi", adminHandler.BindUserBangumi)
+			protected.DELETE("/users/:id/bangumi", adminHandler.UnbindUserBangumi)
 
-		apiGroup.GET("/aliases/subjects", adminHandler.ListSubjectAliases)
-		apiGroup.POST("/aliases/subjects", adminHandler.UpsertSubjectAliases)
-		apiGroup.DELETE("/aliases/subjects/:subject_id", adminHandler.DeleteSubjectAliases)
+			// Rules
+			protected.GET("/rules", adminHandler.ListRules)
+			protected.POST("/rules", adminHandler.SaveRule)
+			protected.PUT("/rules/:name/toggle", adminHandler.ToggleRule)
+			protected.DELETE("/rules/:name", adminHandler.DeleteRule)
+			protected.POST("/rules/import-url", adminHandler.ImportRulesFromURL)
+			protected.POST("/rules/test", adminHandler.TestRule)
 
-		// History
-		apiGroup.GET("/history", adminHandler.ListHistory)
+			// Aliases & Synonyms
+			protected.GET("/aliases/synonyms", adminHandler.ListGlobalSynonyms)
+			protected.POST("/aliases/synonyms", adminHandler.UpsertGlobalSynonym)
+			protected.DELETE("/aliases/synonyms/:pattern", adminHandler.DeleteGlobalSynonym)
+			protected.POST("/aliases/synonyms/reset", adminHandler.ResetGlobalSynonyms)
+
+			protected.GET("/aliases/subjects", adminHandler.ListSubjectAliases)
+			protected.POST("/aliases/subjects", adminHandler.UpsertSubjectAliases)
+			protected.DELETE("/aliases/subjects/:subject_id", adminHandler.DeleteSubjectAliases)
+
+			// History
+			protected.GET("/history", adminHandler.ListHistory)
+		}
 	}
 
 	// 3. Embedded Web SPA (/web)

@@ -8,6 +8,11 @@ export default defineConfig({
     tailwindcss(),
   ],
   base: './',
+  build: {
+    target: 'esnext',
+    cssTarget: 'chrome100',
+    minify: 'terser',
+  },
   server: {
     port: 3000,
     proxy: {
