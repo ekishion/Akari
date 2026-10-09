@@ -29,11 +29,14 @@ export const AddRuleModal: React.FC<AddRuleModalProps> = ({ isOpen, onClose, onS
       if (mode === 'url') {
         if (!url.trim()) throw new Error('请输入有效的规则订阅 URL')
         const res = await api.importRulesFromUrl(url.trim())
-        setSuccessMsg(`成功导入 ${res.importedCount} 条规则！`)
+        const detail = res.updatedCount > 0
+          ? `成功导入 ${res.importedCount} 条规则（新增 ${res.addedCount} 条，覆盖更新 ${res.updatedCount} 条）！`
+          : `成功导入 ${res.importedCount} 条规则！`
+        setSuccessMsg(detail)
         setTimeout(() => {
           onSuccess()
           onClose()
-        }, 1000)
+        }, 1200)
       } else {
         if (!jsonText.trim()) throw new Error('请输入 Kazumi 规则 JSON 内容')
         let parsed: any

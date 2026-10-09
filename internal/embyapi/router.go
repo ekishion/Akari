@@ -103,10 +103,13 @@ func SetupRouter(
 
 			// Rules
 			protected.GET("/rules", adminHandler.ListRules)
+			protected.GET("/rules/:name", adminHandler.GetRule)
 			protected.POST("/rules", adminHandler.SaveRule)
+			protected.PUT("/rules/:name", adminHandler.SaveRule)
 			protected.PUT("/rules/:name/toggle", adminHandler.ToggleRule)
 			protected.DELETE("/rules/:name", adminHandler.DeleteRule)
 			protected.POST("/rules/import-url", adminHandler.ImportRulesFromURL)
+			protected.POST("/rules/update-all", adminHandler.UpdateAllRules)
 			protected.POST("/rules/test", adminHandler.TestRule)
 
 			// Aliases & Synonyms

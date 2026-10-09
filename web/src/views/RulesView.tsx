@@ -5,6 +5,8 @@ import {
   Plus,
   Play,
   Trash2,
+  Edit3,
+  RefreshCw,
   ExternalLink,
   Search,
   Layers,
@@ -20,6 +22,7 @@ import { MdSwitch } from '../components/md3/MdSwitch'
 import { MdDialog } from '../components/md3/MdDialog'
 import { RuleTestModal } from '../components/RuleTestModal'
 import { AddRuleModal } from '../components/AddRuleModal'
+import { EditRuleModal } from '../components/EditRuleModal'
 
 interface RulesViewProps {
   rules: RulePlugin[]
@@ -49,8 +52,10 @@ export const RulesView: React.FC<RulesViewProps> = ({ rules, onRefresh }) => {
   const [activeTab, setActiveTab] = useState<'plugins' | 'aliases'>('plugins')
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedRuleForTest, setSelectedRuleForTest] = useState<RulePlugin | null>(null)
+  const [selectedRuleForEdit, setSelectedRuleForEdit] = useState<RulePlugin | null>(null)
   const [isAddOpen, setIsAddOpen] = useState(false)
   const [togglingRule, setTogglingRule] = useState<string | null>(null)
+  const [updatingAllRules, setUpdatingAllRules] = useState(false)
 
   // Aliases & Synonyms state
   const [synonyms, setSynonyms] = useState<GlobalSynonym[]>([])
@@ -87,9 +92,9 @@ export const RulesView: React.FC<RulesViewProps> = ({ rules, onRefresh }) => {
   }, [activeTab])
 
   const handleToggle = async (rule: RulePlugin) => {
-    setTogglingRule(rule.name)
+    setTogglingRule(rule.name || rule.id)
     try {
-      await api.toggleRule(rule.name, !rule.enabled)
+      await api.toggleRule(rule.name || rule.id, !rule.enabled)
       onRefresh()
     } catch (err: any) {
       alert(err.message || '切换规则状态失败')
@@ -101,10 +106,24 @@ export const RulesView: React.FC<RulesViewProps> = ({ rules, onRefresh }) => {
   const handleDelete = async (rule: RulePlugin) => {
     if (!confirm(`确定要删除解析规则 "${rule.name}" 吗？`)) return
     try {
-      await api.deleteRule(rule.name)
+      await api.deleteRule(rule.name || rule.id)
       onRefresh()
     } catch (err: any) {
       alert(err.message || '删除失败')
+    }
+  }
+
+  const handleUpdateAllRules = async () => {
+    if (!confirm('确定要从官方规则源一键更新覆盖所有规则吗？现有规则的启用/禁用状态将被保留。')) return
+    setUpdatingAllRules(true)
+    try {
+      const res = await api.updateAllRules()
+      alert(`规则同步更新完成！\n共处理 ${res.importedCount} 条规则（新增 ${res.addedCount} 条，覆盖更新 ${res.updatedCount} 条）`)
+      onRefresh()
+    } catch (err: any) {
+      alert(err.message || '更新规则失败')
+    } finally {
+      setUpdatingAllRules(false)
     }
   }
 
@@ -265,15 +284,26 @@ export const RulesView: React.FC<RulesViewProps> = ({ rules, onRefresh }) => {
                   leadingIcon={<Search className="w-4 h-4" />}
                 />
               </div>
-              <MdButton
-                variant="filled"
-                size="md"
-                onClick={() => setIsAddOpen(true)}
-                icon={<Plus className="w-4 h-4" />}
-                className="shrink-0 self-end sm:self-auto"
-              >
-                添加 / 导入规则
-              </MdButton>
+              <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                <MdButton
+                  variant="tonal"
+                  size="md"
+                  onClick={handleUpdateAllRules}
+                  disabled={updatingAllRules}
+                  loading={updatingAllRules}
+                  icon={<RefreshCw className={`w-4 h-4 ${updatingAllRules ? 'animate-spin' : ''}`} />}
+                >
+                  一键更新规则
+                </MdButton>
+                <MdButton
+                  variant="filled"
+                  size="md"
+                  onClick={() => setIsAddOpen(true)}
+                  icon={<Plus className="w-4 h-4" />}
+                >
+                  添加 / 导入规则
+                </MdButton>
+              </div>
             </div>
 
             {/* Rules Cards Grid */}
@@ -315,7 +345,7 @@ export const RulesView: React.FC<RulesViewProps> = ({ rules, onRefresh }) => {
 
                         <MdSwitch
                           checked={rule.enabled}
-                          disabled={togglingRule === rule.name}
+                          disabled={togglingRule === (rule.name || rule.id)}
                           onChange={() => handleToggle(rule)}
                         />
                       </div>
@@ -349,18 +379,28 @@ export const RulesView: React.FC<RulesViewProps> = ({ rules, onRefresh }) => {
                         在线沙盒测试
                       </MdButton>
 
-                      <button
-                        onClick={() => handleDelete(rule)}
-                        className="p-2 text-[var(--md-on-surface-variant)] hover:text-[var(--md-danger)] hover:bg-[var(--md-danger-container)]/30 rounded-full transition-colors cursor-pointer"
-                        title="删除规则"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => setSelectedRuleForEdit(rule)}
+                          className="p-2 text-[var(--md-on-surface-variant)] hover:text-[var(--md-primary)] hover:bg-[var(--md-primary-container)]/30 rounded-full transition-colors cursor-pointer"
+                          title="编辑修改规则"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+
+                        <button
+                          onClick={() => handleDelete(rule)}
+                          className="p-2 text-[var(--md-on-surface-variant)] hover:text-[var(--md-danger)] hover:bg-[var(--md-danger-container)]/30 rounded-full transition-colors cursor-pointer"
+                          title="删除规则"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   </MdCard>
                 </motion.div>
-              )))}
-            </motion.div>
+              )))
+            }</motion.div>
           </motion.div>
         ) : (
           <motion.div
@@ -602,6 +642,13 @@ export const RulesView: React.FC<RulesViewProps> = ({ rules, onRefresh }) => {
           setIsAddOpen(false)
           onRefresh()
         }}
+      />
+
+      <EditRuleModal
+        rule={selectedRuleForEdit}
+        isOpen={!!selectedRuleForEdit}
+        onClose={() => setSelectedRuleForEdit(null)}
+        onSuccess={onRefresh}
       />
 
       <RuleTestModal

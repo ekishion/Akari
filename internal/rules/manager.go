@@ -111,6 +111,13 @@ func (m *RuleManager) SavePlugin(p *engine.Plugin) error {
 		return fmt.Errorf("plugin ID contains invalid control characters")
 	}
 
+	// Remove any existing duplicate entries with same ID or Name
+	for k, existing := range m.plugins {
+		if strings.EqualFold(strings.TrimSpace(existing.ID), p.ID) || strings.EqualFold(strings.TrimSpace(existing.Name), p.Name) {
+			delete(m.plugins, k)
+		}
+	}
+
 	m.plugins[p.Name] = p
 	m.saveRulesToFileLocked()
 	log.Printf("[RuleManager] Saved plugin '%s' (enabled=%v)", p.Name, p.Enabled)
@@ -121,21 +128,47 @@ func (m *RuleManager) TogglePlugin(nameOrId string, enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var target *engine.Plugin
-	for _, p := range m.plugins {
-		if strings.EqualFold(p.Name, nameOrId) || strings.EqualFold(p.ID, nameOrId) {
-			target = p
-			break
+	cleaned := strings.TrimSpace(nameOrId)
+	if unescaped, err := url.PathUnescape(cleaned); err == nil && unescaped != "" {
+		cleaned = unescaped
+	}
+	if unescaped, err := url.QueryUnescape(cleaned); err == nil && unescaped != "" {
+		cleaned = unescaped
+	}
+	cleaned = strings.TrimSpace(cleaned)
+
+	var targets []*engine.Plugin
+	for k, p := range m.plugins {
+		if strings.EqualFold(strings.TrimSpace(k), cleaned) ||
+			strings.EqualFold(strings.TrimSpace(p.Name), cleaned) ||
+			strings.EqualFold(strings.TrimSpace(p.ID), cleaned) ||
+			strings.EqualFold(strings.TrimPrefix(p.ID, "rule_"), strings.TrimPrefix(cleaned, "rule_")) ||
+			strings.EqualFold(strings.TrimSpace(p.BaseURL), cleaned) {
+			targets = append(targets, p)
 		}
 	}
 
-	if target == nil {
+	if len(targets) == 0 {
+		normClean := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(cleaned, " ", ""), "_", ""))
+		for k, p := range m.plugins {
+			normK := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(k, " ", ""), "_", ""))
+			normName := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(p.Name, " ", ""), "_", ""))
+			normID := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(p.ID, " ", ""), "_", ""))
+			if normK == normClean || normName == normClean || normID == normClean || normID == "rule"+normClean {
+				targets = append(targets, p)
+			}
+		}
+	}
+
+	if len(targets) == 0 {
 		return fmt.Errorf("plugin '%s' not found", nameOrId)
 	}
 
-	target.Enabled = enabled
+	for _, target := range targets {
+		target.Enabled = enabled
+		log.Printf("[RuleManager] Toggled plugin '%s' -> enabled=%v", target.Name, enabled)
+	}
 	m.saveRulesToFileLocked()
-	log.Printf("[RuleManager] Toggled plugin '%s' -> enabled=%v", target.Name, enabled)
 	return nil
 }
 
@@ -143,38 +176,101 @@ func (m *RuleManager) DeletePlugin(nameOrId string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var targetKey string
+	cleaned := strings.TrimSpace(nameOrId)
+	if unescaped, err := url.PathUnescape(cleaned); err == nil && unescaped != "" {
+		cleaned = unescaped
+	}
+	if unescaped, err := url.QueryUnescape(cleaned); err == nil && unescaped != "" {
+		cleaned = unescaped
+	}
+	cleaned = strings.TrimSpace(cleaned)
+
+	var keysToDelete []string
 	for k, p := range m.plugins {
-		if strings.EqualFold(p.Name, nameOrId) || strings.EqualFold(p.ID, nameOrId) {
-			targetKey = k
-			break
+		if strings.EqualFold(strings.TrimSpace(k), cleaned) ||
+			strings.EqualFold(strings.TrimSpace(p.Name), cleaned) ||
+			strings.EqualFold(strings.TrimSpace(p.ID), cleaned) ||
+			strings.EqualFold(strings.TrimPrefix(p.ID, "rule_"), strings.TrimPrefix(cleaned, "rule_")) ||
+			strings.EqualFold(strings.TrimSpace(p.BaseURL), cleaned) {
+			keysToDelete = append(keysToDelete, k)
 		}
 	}
 
-	if targetKey == "" {
+	if len(keysToDelete) == 0 {
+		normClean := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(cleaned, " ", ""), "_", ""))
+		for k, p := range m.plugins {
+			normK := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(k, " ", ""), "_", ""))
+			normName := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(p.Name, " ", ""), "_", ""))
+			normID := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(p.ID, " ", ""), "_", ""))
+			if normK == normClean || normName == normClean || normID == normClean || normID == "rule"+normClean {
+				keysToDelete = append(keysToDelete, k)
+			}
+		}
+	}
+
+	if len(keysToDelete) == 0 {
 		return fmt.Errorf("plugin '%s' not found", nameOrId)
 	}
 
-	delete(m.plugins, targetKey)
+	for _, k := range keysToDelete {
+		delete(m.plugins, k)
+	}
 	m.saveRulesToFileLocked()
-	log.Printf("[RuleManager] Deleted plugin '%s'", targetKey)
+	log.Printf("[RuleManager] Deleted plugin(s) for query '%s' (keys: %v)", nameOrId, keysToDelete)
 	return nil
 }
 
-func (m *RuleManager) ImportPluginsJSON(data []byte, sourceBaseURL string) (int, error) {
+type ImportStats struct {
+	TotalCount   int `json:"totalCount"`
+	AddedCount   int `json:"addedCount"`
+	UpdatedCount int `json:"updatedCount"`
+}
+
+func (m *RuleManager) importPluginLocked(p *engine.Plugin, stats *ImportStats) {
+	if p == nil || strings.TrimSpace(p.Name) == "" {
+		return
+	}
+	p.Name = strings.TrimSpace(p.Name)
+	p.ID = strings.TrimSpace(p.ID)
+	if p.ID == "" {
+		p.ID = "rule_" + strings.ToLower(p.Name)
+	}
+
+	var existingFound *engine.Plugin
+	for k, existing := range m.plugins {
+		if strings.EqualFold(strings.TrimSpace(existing.ID), p.ID) ||
+			strings.EqualFold(strings.TrimSpace(existing.Name), p.Name) ||
+			(p.BaseURL != "" && existing.BaseURL != "" && strings.EqualFold(strings.TrimRight(existing.BaseURL, "/"), strings.TrimRight(p.BaseURL, "/"))) {
+			existingFound = existing
+			delete(m.plugins, k)
+		}
+	}
+
+	if existingFound != nil {
+		// Preserve user's toggle state on updates
+		p.Enabled = existingFound.Enabled
+		stats.UpdatedCount++
+	} else {
+		p.Enabled = true
+		stats.AddedCount++
+	}
+	stats.TotalCount++
+
+	m.plugins[p.Name] = p
+}
+
+func (m *RuleManager) ImportPluginsJSON(data []byte, sourceBaseURL string) (*ImportStats, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	stats := &ImportStats{}
+
 	// 1. Try single plugin
 	var single engine.Plugin
-	if err := json.Unmarshal(data, &single); err == nil && single.Name != "" && single.BaseURL != "" {
-		if single.ID == "" {
-			single.ID = "rule_" + strings.ToLower(single.Name)
-		}
-		single.Enabled = true
-		m.plugins[single.Name] = &single
+	if err := json.Unmarshal(data, &single); err == nil && single.Name != "" && (single.BaseURL != "" || single.SearchURL != "") {
+		m.importPluginLocked(&single, stats)
 		m.saveRulesToFileLocked()
-		return 1, nil
+		return stats, nil
 	}
 
 	// 2. Try array of full plugins or index.json
@@ -188,9 +284,6 @@ func (m *RuleManager) ImportPluginsJSON(data []byte, sourceBaseURL string) (int,
 			var p engine.Plugin
 			if err := json.Unmarshal(itemBytes, &p); err == nil && p.Name != "" {
 				if p.BaseURL != "" || p.SearchURL != "" {
-					if p.ID == "" {
-						p.ID = "rule_" + strings.ToLower(p.Name)
-					}
 					fullPlugins = append(fullPlugins, &p)
 				} else {
 					// Index-only entry (e.g. Predidit/KazumiRules index.json)
@@ -199,10 +292,8 @@ func (m *RuleManager) ImportPluginsJSON(data []byte, sourceBaseURL string) (int,
 			}
 		}
 
-		importedCount := len(fullPlugins)
-		// Save all full plugins found directly
 		for _, p := range fullPlugins {
-			m.plugins[p.Name] = p
+			m.importPluginLocked(p, stats)
 		}
 
 		// If it was an index.json, fetch individual rule files concurrently
@@ -216,7 +307,8 @@ func (m *RuleManager) ImportPluginsJSON(data []byte, sourceBaseURL string) (int,
 
 			client := &http.Client{Timeout: 10 * time.Second}
 			var wg sync.WaitGroup
-			var mu sync.Mutex
+			var fetchedMu sync.Mutex
+			var fetchedPlugins []*engine.Plugin
 			sem := make(chan struct{}, 6) // max 6 concurrent downloads
 
 			for _, name := range indexNames {
@@ -246,32 +338,31 @@ func (m *RuleManager) ImportPluginsJSON(data []byte, sourceBaseURL string) (int,
 
 					var plugin engine.Plugin
 					if err := json.Unmarshal(body, &plugin); err == nil && plugin.Name != "" {
-						if plugin.ID == "" {
-							plugin.ID = "rule_" + strings.ToLower(plugin.Name)
-						}
-						plugin.Enabled = true
-						mu.Lock()
-						m.plugins[plugin.Name] = &plugin
-						importedCount++
-						mu.Unlock()
+						fetchedMu.Lock()
+						fetchedPlugins = append(fetchedPlugins, &plugin)
+						fetchedMu.Unlock()
 					}
 				}(name)
 			}
 			wg.Wait()
+
+			for _, p := range fetchedPlugins {
+				m.importPluginLocked(p, stats)
+			}
 		}
 
 		m.saveRulesToFileLocked()
-		return importedCount, nil
+		return stats, nil
 	}
 
-	return 0, fmt.Errorf("invalid Kazumi plugin JSON format")
+	return stats, fmt.Errorf("invalid Kazumi plugin JSON format")
 }
 
-func (m *RuleManager) ImportPluginsFromURL(remoteUrl string) (int, error) {
+func (m *RuleManager) ImportPluginsFromURL(remoteUrl string) (*ImportStats, error) {
 	remoteUrl = strings.TrimSpace(remoteUrl)
 	u, err := url.Parse(remoteUrl)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return 0, fmt.Errorf("invalid URL scheme: must be http or https")
+		return nil, fmt.Errorf("invalid URL scheme: must be http or https")
 	}
 
 	urlsToTry := []string{remoteUrl}
@@ -319,7 +410,7 @@ func (m *RuleManager) ImportPluginsFromURL(remoteUrl string) (int, error) {
 	}
 
 	if len(body) == 0 {
-		return 0, fmt.Errorf("failed to fetch from url: %v", lastErr)
+		return nil, fmt.Errorf("failed to fetch from url: %v", lastErr)
 	}
 
 	// Compute base URL for sub-resource fetching

@@ -162,6 +162,7 @@ export const api = {
 
   // Rules & Plugins
   listRules: () => request<RulePlugin[]>('/api/rules'),
+  getRule: (nameOrId: string) => request<any>(`/api/rules/${encodeURIComponent(nameOrId)}`),
   saveRule: (rule: any) =>
     request<RulePlugin>('/api/rules', {
       method: 'POST',
@@ -175,9 +176,14 @@ export const api = {
   deleteRule: (name: string) =>
     request<{ status: string }>(`/api/rules/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   importRulesFromUrl: (url: string) =>
-    request<{ status: string; importedCount: number }>('/api/rules/import-url', {
+    request<{ status: string; importedCount: number; addedCount: number; updatedCount: number }>('/api/rules/import-url', {
       method: 'POST',
       body: JSON.stringify({ url }),
+    }),
+  updateAllRules: (url?: string) =>
+    request<{ status: string; importedCount: number; addedCount: number; updatedCount: number }>('/api/rules/update-all', {
+      method: 'POST',
+      body: JSON.stringify({ url: url || '' }),
     }),
   testRule: (params: { plugin?: any; ruleName?: string; keyword: string }) =>
     request<TestResult>('/api/rules/test', {

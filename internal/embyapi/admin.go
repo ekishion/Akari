@@ -3,6 +3,7 @@ package embyapi
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strconv"
@@ -468,6 +469,9 @@ func (h *AdminHandler) SaveRule(c *gin.Context) {
 
 func (h *AdminHandler) ToggleRule(c *gin.Context) {
 	name := c.Param("name")
+	if unescaped, err := url.PathUnescape(name); err == nil && unescaped != "" {
+		name = unescaped
+	}
 	var req struct {
 		Enabled bool `json:"enabled"`
 	}
@@ -484,8 +488,24 @@ func (h *AdminHandler) ToggleRule(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "name": name, "enabled": req.Enabled})
 }
 
+func (h *AdminHandler) GetRule(c *gin.Context) {
+	name := c.Param("name")
+	if unescaped, err := url.PathUnescape(name); err == nil && unescaped != "" {
+		name = unescaped
+	}
+	p, ok := h.ruleMgr.GetPluginByName(name)
+	if !ok || p == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Plugin not found"})
+		return
+	}
+	c.JSON(http.StatusOK, p)
+}
+
 func (h *AdminHandler) DeleteRule(c *gin.Context) {
 	name := c.Param("name")
+	if unescaped, err := url.PathUnescape(name); err == nil && unescaped != "" {
+		name = unescaped
+	}
 	if err := h.ruleMgr.DeletePlugin(name); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -502,13 +522,42 @@ func (h *AdminHandler) ImportRulesFromURL(c *gin.Context) {
 		return
 	}
 
-	count, err := h.ruleMgr.ImportPluginsFromURL(req.URL)
+	stats, err := h.ruleMgr.ImportPluginsFromURL(req.URL)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "ok", "importedCount": count})
+	c.JSON(http.StatusOK, gin.H{
+		"status":        "ok",
+		"importedCount": stats.TotalCount,
+		"addedCount":    stats.AddedCount,
+		"updatedCount":  stats.UpdatedCount,
+	})
+}
+
+func (h *AdminHandler) UpdateAllRules(c *gin.Context) {
+	var req struct {
+		URL string `json:"url"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	targetURL := strings.TrimSpace(req.URL)
+	if targetURL == "" {
+		targetURL = "https://raw.githubusercontent.com/Predidit/KazumiRules/master/index.json"
+	}
+
+	stats, err := h.ruleMgr.ImportPluginsFromURL(targetURL)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":        "ok",
+		"importedCount": stats.TotalCount,
+		"addedCount":    stats.AddedCount,
+		"updatedCount":  stats.UpdatedCount,
+	})
 }
 
 type TestRuleReq struct {
