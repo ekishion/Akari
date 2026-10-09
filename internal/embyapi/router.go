@@ -1,7 +1,9 @@
 package embyapi
 
 import (
+	"io/fs"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -31,6 +33,7 @@ func SetupRouter(
 ) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	_ = r.SetTrustedProxies(nil)
 	r.Use(gin.Recovery())
 	r.Use(gin.Logger())
 
@@ -125,16 +128,24 @@ func SetupRouter(
 	if err == nil {
 		fileServer := http.FileServer(http.FS(webFS))
 		r.GET("/web/*filepath", func(c *gin.Context) {
-			p := c.Param("filepath")
-			if p == "" || p == "/" {
+			rawPath := c.Param("filepath")
+			if rawPath == "" || rawPath == "/" {
 				c.Request.URL.Path = "/"
 				fileServer.ServeHTTP(c.Writer, c.Request)
 				return
 			}
-			f, err := webFS.Open(strings.TrimPrefix(p, "/"))
+
+			// Security: Strict path traversal sanitization
+			cleanPath := path.Clean(strings.TrimPrefix(rawPath, "/"))
+			if strings.HasPrefix(cleanPath, "..") || strings.Contains(cleanPath, "/..") || strings.Contains(cleanPath, "\x00") || !fs.ValidPath(cleanPath) {
+				c.Status(http.StatusForbidden)
+				return
+			}
+
+			f, err := webFS.Open(cleanPath)
 			if err == nil {
 				_ = f.Close()
-				c.Request.URL.Path = p
+				c.Request.URL.Path = "/" + cleanPath
 				fileServer.ServeHTTP(c.Writer, c.Request)
 				return
 			}

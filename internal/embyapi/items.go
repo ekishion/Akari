@@ -7,7 +7,9 @@ import (
 	"image/color"
 	"image/png"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -871,20 +873,44 @@ func (h *ItemsHandler) GetPrimaryImage(c *gin.Context) {
 	c.DataFromReader(resp.StatusCode, resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
 }
 
+func isPrivateOrLoopbackHost(hostname string) bool {
+	hostname = strings.TrimSpace(strings.ToLower(hostname))
+	if hostname == "localhost" || hostname == "ip6-localhost" || hostname == "ip6-loopback" {
+		return true
+	}
+	ip := net.ParseIP(hostname)
+	if ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+	}
+	return false
+}
+
 // ProxyImage handles GET /emby/items/images/proxy
 func (h *ItemsHandler) ProxyImage(c *gin.Context) {
-	rawUrl := c.Query("url")
+	rawUrl := strings.TrimSpace(c.Query("url"))
 	if rawUrl == "" {
 		c.Status(http.StatusBadRequest)
 		return
 	}
 
-	req, err := http.NewRequest(http.MethodGet, rawUrl, nil)
+	u, err := url.Parse(rawUrl)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+
+	// Security: Prevent SSRF attacks against internal network/cloud metadata
+	if isPrivateOrLoopbackHost(u.Hostname()) {
+		c.Status(http.StatusForbidden)
+		return
+	}
+
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, rawUrl, nil)
 	if err != nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 	req.Header.Set("Referer", "https://bgm.tv")
 
 	resp, err := http.DefaultClient.Do(req)

@@ -95,11 +95,20 @@ func (m *RuleManager) SavePlugin(p *engine.Plugin) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	p.Name = strings.TrimSpace(p.Name)
 	if p.Name == "" {
 		return fmt.Errorf("plugin name cannot be empty")
 	}
+	if strings.ContainsAny(p.Name, "\x00\r\n\t") {
+		return fmt.Errorf("plugin name contains invalid control characters")
+	}
+
+	p.ID = strings.TrimSpace(p.ID)
 	if p.ID == "" {
 		p.ID = "rule_" + strings.ToLower(p.Name)
+	}
+	if strings.ContainsAny(p.ID, "\x00\r\n\t") {
+		return fmt.Errorf("plugin ID contains invalid control characters")
 	}
 
 	m.plugins[p.Name] = p
@@ -260,6 +269,11 @@ func (m *RuleManager) ImportPluginsJSON(data []byte, sourceBaseURL string) (int,
 
 func (m *RuleManager) ImportPluginsFromURL(remoteUrl string) (int, error) {
 	remoteUrl = strings.TrimSpace(remoteUrl)
+	u, err := url.Parse(remoteUrl)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return 0, fmt.Errorf("invalid URL scheme: must be http or https")
+	}
+
 	urlsToTry := []string{remoteUrl}
 
 	// Auto generate mirror fallbacks for GitHub URLs

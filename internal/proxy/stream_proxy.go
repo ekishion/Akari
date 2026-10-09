@@ -91,6 +91,12 @@ func (p *StreamProxy) HandleM3U8(c *gin.Context) {
 		return
 	}
 
+	u, err := url.Parse(rawTarget)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		c.String(http.StatusBadRequest, "Invalid or disallowed stream URL scheme")
+		return
+	}
+
 	itemId := c.Query("item_id")
 	referer := c.Query("referer")
 	ua := c.Query("ua")
@@ -192,9 +198,15 @@ func (p *StreamProxy) HandleM3U8(c *gin.Context) {
 
 // HandleSegment proxies ts/media segments with header injection and Range support
 func (p *StreamProxy) HandleSegment(c *gin.Context) {
-	rawTarget := c.Query("url")
+	rawTarget := strings.TrimSpace(c.Query("url"))
 	if rawTarget == "" {
 		c.String(http.StatusBadRequest, "Missing url parameter")
+		return
+	}
+
+	u, err := url.Parse(rawTarget)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		c.String(http.StatusBadRequest, "Invalid or disallowed segment URL scheme")
 		return
 	}
 

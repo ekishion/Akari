@@ -1,7 +1,12 @@
 package storage
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -18,9 +23,10 @@ import (
 )
 
 type DB struct {
-	db  *sql.DB
-	cfg *config.Config
-	mu  sync.RWMutex
+	db     *sql.DB
+	cfg    *config.Config
+	encKey []byte
+	mu     sync.RWMutex
 }
 
 type PlaybackRecord struct {
@@ -70,6 +76,19 @@ func OpenDB(cfg *config.Config) (*DB, error) {
 	}
 
 	s.migrateFromJSON()
+
+	// Initialize or load master encryption key (256-bit AES) for credentials at rest
+	encKey := make([]byte, 32)
+	if secretHex, err := s.GetSetting("master_token_key"); err == nil && secretHex != "" {
+		if b, err := hex.DecodeString(secretHex); err == nil && len(b) == 32 {
+			encKey = b
+		}
+	}
+	if encKey[0] == 0 && encKey[31] == 0 {
+		_, _ = rand.Read(encKey)
+		_ = s.SaveSetting("master_token_key", hex.EncodeToString(encKey))
+	}
+	s.encKey = encKey
 
 	// Load persisted system settings
 	if bgmHost, err := s.GetSetting("bangumi_host"); err == nil && bgmHost != "" {
@@ -260,6 +279,66 @@ func (s *DB) migrateFromJSON() {
 	}
 }
 
+// EncryptSecret encrypts sensitive tokens using AES-256-GCM
+func (s *DB) EncryptSecret(plaintext string) string {
+	if plaintext == "" || len(s.encKey) != 32 {
+		return plaintext
+	}
+	if strings.HasPrefix(plaintext, "enc:v1:") {
+		return plaintext // already encrypted
+	}
+
+	block, err := aes.NewCipher(s.encKey)
+	if err != nil {
+		return plaintext
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return plaintext
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return plaintext
+	}
+
+	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	return "enc:v1:" + base64.RawURLEncoding.EncodeToString(ciphertext)
+}
+
+// DecryptSecret decrypts AES-256-GCM encrypted tokens or returns raw plaintext if not encrypted
+func (s *DB) DecryptSecret(ciphertext string) string {
+	if ciphertext == "" || !strings.HasPrefix(ciphertext, "enc:v1:") || len(s.encKey) != 32 {
+		return ciphertext
+	}
+
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(ciphertext, "enc:v1:"))
+	if err != nil {
+		return ciphertext
+	}
+
+	block, err := aes.NewCipher(s.encKey)
+	if err != nil {
+		return ciphertext
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil || len(raw) < gcm.NonceSize() {
+		return ciphertext
+	}
+
+	nonceSize := gcm.NonceSize()
+	nonce, cipherBytes := raw[:nonceSize], raw[nonceSize:]
+
+	plain, err := gcm.Open(nil, nonce, cipherBytes, nil)
+	if err != nil {
+		return ciphertext
+	}
+
+	return string(plain)
+}
+
 // User Operations
 
 func (s *DB) UpsertUser(u *UserRecord) error {
@@ -275,6 +354,8 @@ func (s *DB) UpsertUser(u *UserRecord) error {
 		isDisabledInt = 1
 	}
 
+	bgmTokenEnc := s.EncryptSecret(u.BgmAccessToken)
+
 	query := `
 	INSERT INTO users (id, name, password_hash, is_admin, is_disabled, bgm_access_token, bgm_user_id, last_login_at, created_at)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -287,7 +368,7 @@ func (s *DB) UpsertUser(u *UserRecord) error {
 		bgm_user_id = excluded.bgm_user_id,
 		last_login_at = excluded.last_login_at
 	`
-	_, err := s.db.Exec(query, u.ID, u.Name, u.PasswordHash, isAdminInt, isDisabledInt, u.BgmAccessToken, u.BgmUserID, u.LastLoginAt, u.CreatedAt)
+	_, err := s.db.Exec(query, u.ID, u.Name, u.PasswordHash, isAdminInt, isDisabledInt, bgmTokenEnc, u.BgmUserID, u.LastLoginAt, u.CreatedAt)
 	return err
 }
 
@@ -318,6 +399,7 @@ func (s *DB) GetUserByID(id string) (*UserRecord, error) {
 
 	u.IsAdmin = isAdminInt == 1
 	u.IsDisabled = isDisabledInt == 1
+	u.BgmAccessToken = s.DecryptSecret(u.BgmAccessToken)
 	if lastLoginAt.Valid {
 		u.LastLoginAt = &lastLoginAt.Time
 	}
@@ -348,6 +430,7 @@ func (s *DB) ListUsers() ([]*UserRecord, error) {
 		}
 		u.IsAdmin = isAdminInt == 1
 		u.IsDisabled = isDisabledInt == 1
+		u.BgmAccessToken = s.DecryptSecret(u.BgmAccessToken)
 		if lastLoginAt.Valid {
 			u.LastLoginAt = &lastLoginAt.Time
 		}

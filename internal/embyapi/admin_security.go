@@ -47,6 +47,9 @@ func (h *AdminSecurityHandler) SecurityHeadersMiddleware() gin.HandlerFunc {
 		c.Header("X-Frame-Options", "SAMEORIGIN")
 		c.Header("X-XSS-Protection", "1; mode=block")
 		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
+		c.Header("X-Permitted-Cross-Domain-Policies", "none")
+		c.Header("X-Download-Options", "noopen")
+		c.Header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 
 		// Handle CORS for admin panel and Emby clients
 		origin := c.Request.Header.Get("Origin")

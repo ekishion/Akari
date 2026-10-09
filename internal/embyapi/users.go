@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"akari-bridge/internal/auth"
@@ -26,6 +27,22 @@ func NewUsersHandler(authService *auth.AuthService, db *storage.DB) *UsersHandle
 
 // AuthenticateByName handles POST /emby/Users/AuthenticateByName
 func (h *UsersHandler) AuthenticateByName(c *gin.Context) {
+	clientIP := c.ClientIP()
+	userAgent := c.Request.UserAgent()
+
+	// 1. IP Ban check
+	if h.db != nil {
+		if banned, bannedUntil, err := h.db.IsIPBanned(clientIP); err == nil && banned {
+			msg := "IP is temporarily locked due to excessive failed attempts"
+			if bannedUntil != nil {
+				msg = fmt.Sprintf("IP is locked until %s", bannedUntil.Format("15:04:05"))
+			}
+			_ = h.db.RecordAuditLog("login_blocked", clientIP, userAgent, "Blocked attempt from banned IP")
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": msg})
+			return
+		}
+	}
+
 	var req model.AuthenticateUserByNameRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
@@ -39,8 +56,23 @@ func (h *UsersHandler) AuthenticateByName(c *gin.Context) {
 
 	result, err := h.authService.Authenticate(req.Username, pwd)
 	if err != nil {
+		if h.db != nil {
+			attempts, isBanned, _ := h.db.RecordFailedLogin(clientIP, 5, 15*time.Minute)
+			details := fmt.Sprintf("Failed password for user '%s' (Attempt %d/5)", req.Username, attempts)
+			if isBanned {
+				details = fmt.Sprintf("IP banned for 15 mins after 5 failed attempts for user '%s'", req.Username)
+				_ = h.db.RecordAuditLog("ip_banned", clientIP, userAgent, details)
+			} else {
+				_ = h.db.RecordAuditLog("login_failed", clientIP, userAgent, details)
+			}
+		}
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid username or password"})
 		return
+	}
+
+	if h.db != nil {
+		_ = h.db.ClearFailedLogin(clientIP)
+		_ = h.db.RecordAuditLog("login_success", clientIP, userAgent, fmt.Sprintf("User '%s' authenticated via Emby API", req.Username))
 	}
 
 	c.JSON(http.StatusOK, result)

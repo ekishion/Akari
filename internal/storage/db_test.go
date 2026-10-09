@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +41,15 @@ func TestDB_Operations(t *testing.T) {
 	}
 	if fetched.Name != "Alice" || fetched.BgmAccessToken != "bgm_token_123" {
 		t.Errorf("unexpected user record: %+v", fetched)
+	}
+
+	// Verify encryption at rest in raw SQLite row
+	var rawEncToken string
+	if err := db.db.QueryRow(`SELECT bgm_access_token FROM users WHERE id = 'alice'`).Scan(&rawEncToken); err != nil {
+		t.Fatalf("failed to query raw token: %v", err)
+	}
+	if !strings.HasPrefix(rawEncToken, "enc:v1:") {
+		t.Errorf("expected bgm_access_token in DB to be encrypted with enc:v1:, got: %s", rawEncToken)
 	}
 
 	// 2. Token operations
