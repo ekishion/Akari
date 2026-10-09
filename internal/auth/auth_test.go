@@ -138,4 +138,64 @@ func TestAuthService_Middleware(t *testing.T) {
 	if w2.Code != http.StatusOK || w2.Body.String() != "ok:admin" {
 		t.Errorf("expected 200 ok:admin, got %d %s", w2.Code, w2.Body.String())
 	}
+
+	// 3. Authorization header MediaBrowser Token="..."
+	req3 := httptest.NewRequest(http.MethodGet, "/emby/Users/admin/Views", nil)
+	req3.Header.Set("Authorization", `MediaBrowser Client="Infuse", Device="Apple TV", Token="`+authRes.AccessToken+`"`)
+	w3 := httptest.NewRecorder()
+	r.ServeHTTP(w3, req3)
+	if w3.Code != http.StatusOK || w3.Body.String() != "ok:admin" {
+		t.Errorf("expected 200 for Authorization MediaBrowser header, got %d", w3.Code)
+	}
+
+	// 4. Query param api_key
+	req4 := httptest.NewRequest(http.MethodGet, "/emby/Users/admin/Views?api_key="+authRes.AccessToken, nil)
+	w4 := httptest.NewRecorder()
+	r.ServeHTTP(w4, req4)
+	if w4.Code != http.StatusOK || w4.Body.String() != "ok:admin" {
+		t.Errorf("expected 200 for query api_key, got %d", w4.Code)
+	}
+}
+
+func TestAuthService_Middleware_EmptyConfigAdminPassword(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		DataDir:       t.TempDir(),
+		AdminUsername: "Admin",
+		AdminPassword: "", // Empty in config
+		ServerId:      "testserver123",
+	}
+
+	db, err := storage.OpenDB(cfg)
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	defer db.Close()
+
+	svc := NewAuthService(cfg, db)
+
+	r := gin.New()
+	r.Use(svc.Middleware())
+	r.GET("/emby/System/Info/Public", func(c *gin.Context) {
+		c.String(http.StatusOK, "public_info")
+	})
+	r.GET("/emby/Users/admin/Views", func(c *gin.Context) {
+		c.String(http.StatusOK, "protected_views")
+	})
+
+	// 1. Public route must succeed without token
+	reqPub := httptest.NewRequest(http.MethodGet, "/emby/System/Info/Public", nil)
+	wPub := httptest.NewRecorder()
+	r.ServeHTTP(wPub, reqPub)
+	if wPub.Code != http.StatusOK || wPub.Body.String() != "public_info" {
+		t.Errorf("expected 200 public_info, got %d %s", wPub.Code, wPub.Body.String())
+	}
+
+	// 2. Protected route without token MUST be 401 Unauthorized even if AdminPassword is empty in config
+	reqProt := httptest.NewRequest(http.MethodGet, "/emby/Users/admin/Views", nil)
+	wProt := httptest.NewRecorder()
+	r.ServeHTTP(wProt, reqProt)
+	if wProt.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 Unauthorized for protected route without token, got %d", wProt.Code)
+	}
 }

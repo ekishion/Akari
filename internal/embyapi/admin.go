@@ -142,12 +142,16 @@ func (h *AdminHandler) GetStatus(c *gin.Context) {
 		"memoryAllocMB":  m.Alloc / 1024 / 1024,
 		"memorySysMB":    m.Sys / 1024 / 1024,
 		"dbStats":        dbStats,
-		"singleUserMode": h.cfg.AdminPassword == "",
+		"singleUserMode": len(h.authSvc.ListUsers()) <= 1,
 	})
 }
 
 func (h *AdminHandler) GetConfig(c *gin.Context) {
 	proxy := config.GetSystemProxy()
+	hasPassword := false
+	if adminUser, ok := h.authSvc.GetUser("admin"); ok {
+		hasPassword = adminUser.HasPassword
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"serverName":  h.cfg.ServerName,
 		"serverId":    h.cfg.ServerId,
@@ -157,7 +161,7 @@ func (h *AdminHandler) GetConfig(c *gin.Context) {
 		"dandanHost":  h.cfg.DanDanHost,
 		"bangumiHost": h.cfg.BangumiHost,
 		"customProxy": proxy,
-		"hasPassword": h.cfg.AdminPassword != "",
+		"hasPassword": hasPassword,
 	})
 }
 
@@ -335,6 +339,24 @@ func (h *AdminHandler) DeleteUser(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+func (h *AdminHandler) SetUserPassword(c *gin.Context) {
+	userId := c.Param("id")
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload"})
+		return
+	}
+
+	if err := h.authSvc.UpdatePassword(userId, req.Password); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "Password updated successfully"})
 }
 
 func (h *AdminHandler) GetUserTokens(c *gin.Context) {

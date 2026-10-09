@@ -39,7 +39,7 @@ func SetupRouter(
 
 	playbackHandler := NewPlaybackHandler(cfg, bgmClient, ruleMgr, eng, res, danmakuClient, db)
 	adminHandler := NewAdminHandler(cfg, authSvc, ruleMgr, eng, bgmClient, playbackHandler, db)
-	adminSecHandler := NewAdminSecurityHandler(cfg, db, adminAuth, ruleMgr, playbackHandler)
+	adminSecHandler := NewAdminSecurityHandler(cfg, db, adminAuth, authSvc, ruleMgr, playbackHandler)
 	sysHandler := NewSystemHandler(cfg)
 	usersHandler := NewUsersHandler(authSvc, db)
 	viewsHandler := NewViewsHandler(cfg)
@@ -94,6 +94,7 @@ func SetupRouter(
 			protected.GET("/users", adminHandler.ListUsers)
 			protected.POST("/users", adminHandler.CreateUser)
 			protected.DELETE("/users/:id", adminHandler.DeleteUser)
+			protected.POST("/users/:id/password", adminHandler.SetUserPassword)
 			protected.GET("/users/:id/tokens", adminHandler.GetUserTokens)
 			protected.POST("/users/:id/tokens", adminHandler.CreateUserToken)
 			protected.DELETE("/users/:id/tokens/:token", adminHandler.RevokeUserToken)

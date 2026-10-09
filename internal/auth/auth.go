@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 	"akari-bridge/internal/config"
 	"akari-bridge/internal/model"
 	"akari-bridge/internal/storage"
@@ -137,11 +139,26 @@ func NewAuthService(cfg *config.Config, db *storage.DB) *AuthService {
 			log.Printf("[AuthService] Loaded %d user(s) from SQLite", len(dbUsers))
 		}
 
+		// Check if admin password exists in admin_accounts table or existing users table
+		adminPassHash := cfg.AdminPassword
+		if acc, err := db.GetAdminAccount(); err == nil && acc != nil && acc.PasswordHash != "" {
+			adminUser.HasPassword = true
+			adminUser.HasConfiguredPassword = true
+			adminUser.EnableAutoLogin = false
+			adminPassHash = acc.PasswordHash
+			svc.userPwds[adminId] = acc.PasswordHash
+		} else if existingAdmin, ok := svc.users[adminId]; ok && existingAdmin.HasPassword {
+			adminUser.HasPassword = true
+			adminUser.HasConfiguredPassword = true
+			adminUser.EnableAutoLogin = false
+			adminPassHash = svc.userPwds[adminId]
+		}
+
 		// Ensure admin user is persisted in DB
 		_ = db.UpsertUser(&storage.UserRecord{
 			ID:           adminId,
 			Name:         adminUsername,
-			PasswordHash: cfg.AdminPassword,
+			PasswordHash: adminPassHash,
 			IsAdmin:      true,
 			LastLoginAt:  &now,
 			CreatedAt:    now,
@@ -178,8 +195,32 @@ func (s *AuthService) Authenticate(username, password string) (*model.Authentica
 	}
 
 	expectedPwd := s.userPwds[matchedUser.Id]
-	if expectedPwd != "" && password != expectedPwd {
-		return nil, gin.Error{Err: http.ErrAbortHandler, Type: gin.ErrorTypePublic}
+	if matchedUser.HasPassword {
+		if password == "" {
+			return nil, gin.Error{Err: http.ErrAbortHandler, Type: gin.ErrorTypePublic}
+		}
+
+		matched := false
+		if expectedPwd != "" {
+			if bcrypt.CompareHashAndPassword([]byte(expectedPwd), []byte(password)) == nil {
+				matched = true
+			} else if password == expectedPwd {
+				matched = true
+			}
+		}
+
+		// If admin and not matched yet, check against admin_accounts
+		if !matched && matchedUser.Policy.IsAdministrator && s.db != nil {
+			if acc, err := s.db.GetAdminAccount(); err == nil && acc != nil && acc.PasswordHash != "" {
+				if bcrypt.CompareHashAndPassword([]byte(acc.PasswordHash), []byte(password)) == nil {
+					matched = true
+				}
+			}
+		}
+
+		if !matched {
+			return nil, gin.Error{Err: http.ErrAbortHandler, Type: gin.ErrorTypePublic}
+		}
 	}
 
 	// Generate a 32-char hex token
@@ -244,11 +285,15 @@ func (s *AuthService) GetPublicUsers() []model.UserDto {
 }
 
 func (s *AuthService) ValidateToken(token string) (*model.UserDto, bool) {
+	if token == "" {
+		return nil, false
+	}
+
 	s.mu.RLock()
 	userId, ok := s.tokens[token]
 	s.mu.RUnlock()
 
-	if !ok && s.db != nil && token != "" {
+	if !ok && s.db != nil {
 		if dbUserId, err := s.db.GetUserIDByToken(token); err == nil && dbUserId != "" {
 			userId = dbUserId
 			ok = true
@@ -259,21 +304,16 @@ func (s *AuthService) ValidateToken(token string) (*model.UserDto, bool) {
 	}
 
 	if !ok {
-		// Single user open mode if admin has no password
-		if s.cfg.AdminPassword == "" {
-			for _, u := range s.users {
-				if u.Policy.IsAdministrator {
-					return u, true
-				}
-			}
-		}
 		return nil, false
 	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	user, ok := s.users[userId]
-	return user, ok
+	if !ok || user == nil || user.Policy.IsDisabled {
+		return nil, false
+	}
+	return user, true
 }
 
 func (s *AuthService) CreateUser(username, password string, isAdmin bool) (*model.UserDto, error) {
@@ -365,12 +405,26 @@ func (s *AuthService) UpdatePassword(userId, newPassword string) error {
 	s.userPwds[userId] = newPassword
 
 	if s.db != nil {
+		pwdHash := newPassword
+		if newPassword != "" {
+			if h, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost); err == nil {
+				pwdHash = string(h)
+				s.userPwds[userId] = pwdHash
+			}
+		}
 		_ = s.db.UpsertUser(&storage.UserRecord{
 			ID:           userId,
 			Name:         user.Name,
-			PasswordHash: newPassword,
+			PasswordHash: pwdHash,
 			IsAdmin:      user.Policy.IsAdministrator,
 		})
+
+		// If admin, also update admin_accounts table
+		if user.Policy.IsAdministrator || strings.EqualFold(userId, "admin") {
+			if newPassword != "" {
+				_ = s.db.UpdateAdminPassword(user.Name, pwdHash)
+			}
+		}
 	}
 
 	return nil
@@ -512,6 +566,8 @@ func (s *AuthService) GetUserBangumi(userId string) (string, string) {
 }
 
 
+var tokenRegex = regexp.MustCompile(`(?i)token=["']?([^,"'\s]+)["']?`)
+
 // Middleware creates a Gin middleware that extracts and validates Emby tokens
 func (s *AuthService) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -525,15 +581,13 @@ func (s *AuthService) Middleware() gin.HandlerFunc {
 		}
 
 		user, valid := s.ValidateToken(token)
-		if !valid && s.cfg.AdminPassword != "" {
+		if !valid || user == nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 			return
 		}
 
-		if user != nil {
-			c.Set("user", user)
-			c.Set("userId", user.Id)
-		}
+		c.Set("user", user)
+		c.Set("userId", user.Id)
 		c.Next()
 	}
 }
@@ -542,38 +596,78 @@ func ExtractToken(c *gin.Context) string {
 	if key := c.Query("api_key"); key != "" {
 		return key
 	}
+	if key := c.Query("api-key"); key != "" {
+		return key
+	}
 	if token := c.GetHeader("X-Emby-Token"); token != "" {
 		return token
 	}
 	if token := c.GetHeader("X-MediaBrowser-Token"); token != "" {
 		return token
 	}
+	if auth := c.GetHeader("Authorization"); auth != "" {
+		if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+			return strings.TrimSpace(auth[7:])
+		}
+		if matches := tokenRegex.FindStringSubmatch(auth); len(matches) > 1 {
+			return matches[1]
+		}
+	}
 	if auth := c.GetHeader("X-Emby-Authorization"); auth != "" {
-		parts := strings.Split(auth, ",")
-		for _, part := range parts {
-			part = strings.TrimSpace(part)
-			if strings.HasPrefix(strings.ToLower(part), "token=") {
-				tokenVal := strings.TrimPrefix(part, "token=")
-				tokenVal = strings.TrimPrefix(part, "Token=")
-				return strings.Trim(tokenVal, "\"")
-			}
+		if matches := tokenRegex.FindStringSubmatch(auth); len(matches) > 1 {
+			return matches[1]
 		}
 	}
 	return ""
 }
 
 func isPublicPath(path string) bool {
-	publicPrefixes := []string{
-		"/emby/System/Info/Public",
-		"/emby/System/Ping",
-		"/emby/Users/AuthenticateByName",
-		"/emby/Users/Public",
-		"/emby/items/images",
+	p := strings.ToLower(strings.TrimRight(path, "/"))
+	pWithoutEmby := strings.TrimPrefix(p, "/emby")
+	if !strings.HasPrefix(pWithoutEmby, "/") {
+		pWithoutEmby = "/" + pWithoutEmby
 	}
-	for _, p := range publicPrefixes {
-		if strings.HasPrefix(strings.ToLower(path), strings.ToLower(p)) {
+
+	publicExact := []string{
+		"/system/info/public",
+		"/system/info",
+		"/system/ping",
+		"/system/configuration",
+		"/system/endpoint",
+		"/users/authenticatebyname",
+		"/users/public",
+		"/library/mediafolders",
+		"/items/root",
+		"/items/counts",
+		"/studios",
+		"/genres",
+		"/persons",
+		"/collections",
+		"/playlists",
+		"/livetv/channels",
+	}
+
+	for _, exact := range publicExact {
+		if pWithoutEmby == exact {
 			return true
 		}
 	}
+
+	publicPrefixes := []string{
+		"/items/images",
+		"/videos/",
+		"/stream/",
+		"/displaypreferences",
+		"/persons/",
+		"/embywebsocket",
+		"/websocket",
+	}
+
+	for _, prefix := range publicPrefixes {
+		if strings.HasPrefix(pWithoutEmby, prefix) {
+			return true
+		}
+	}
+
 	return false
 }

@@ -49,8 +49,22 @@ func TestSetupRouter(t *testing.T) {
 		t.Fatal("expected non-nil router")
 	}
 
+	// 0. Verify unauthenticated access to protected endpoint is rejected with 401
+	reqUnauth := httptest.NewRequest(http.MethodGet, "/emby/Users/admin/Views", nil)
+	wUnauth := httptest.NewRecorder()
+	r.ServeHTTP(wUnauth, reqUnauth)
+	if wUnauth.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated request, got %d", wUnauth.Code)
+	}
+
+	token, err := authSvc.CreateTokenForUser("admin", "TestRunner")
+	if err != nil {
+		t.Fatalf("CreateTokenForUser failed: %v", err)
+	}
+
 	// Test GET /emby/Users/:id/Items/bgm_sub_622288
 	req := httptest.NewRequest(http.MethodGet, "/emby/Users/00000000000000000000000000000001/Items/bgm_sub_622288", nil)
+	req.Header.Set("X-Emby-Token", token)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -59,6 +73,7 @@ func TestSetupRouter(t *testing.T) {
 
 	// Test GET /emby/Shows/bgm_sub_622288/Seasons
 	reqSeasons := httptest.NewRequest(http.MethodGet, "/emby/Shows/bgm_sub_622288/Seasons", nil)
+	reqSeasons.Header.Set("X-Emby-Token", token)
 	wSeasons := httptest.NewRecorder()
 	r.ServeHTTP(wSeasons, reqSeasons)
 	if wSeasons.Code != http.StatusOK {
@@ -67,6 +82,7 @@ func TestSetupRouter(t *testing.T) {
 
 	// Test GET /emby/Shows/bgm_sub_622288/Episodes
 	reqEpisodes := httptest.NewRequest(http.MethodGet, "/emby/Shows/bgm_sub_622288/Episodes", nil)
+	reqEpisodes.Header.Set("X-Emby-Token", token)
 	wEpisodes := httptest.NewRecorder()
 	r.ServeHTTP(wEpisodes, reqEpisodes)
 	if wEpisodes.Code != http.StatusOK {
@@ -75,6 +91,7 @@ func TestSetupRouter(t *testing.T) {
 
 	// Test GET /emby/Users/:id/Items/bgm_ep_622288_1
 	reqEp := httptest.NewRequest(http.MethodGet, "/emby/Users/00000000000000000000000000000001/Items/bgm_ep_622288_1", nil)
+	reqEp.Header.Set("X-Emby-Token", token)
 	wEp := httptest.NewRecorder()
 	r.ServeHTTP(wEp, reqEp)
 	if wEp.Code != http.StatusOK {
@@ -95,6 +112,7 @@ func TestSetupRouter(t *testing.T) {
 
 	// 5. Test Favorite Flow: Mark favorite on bgm_sub_622288
 	reqFav := httptest.NewRequest(http.MethodPost, "/emby/Users/admin/FavoriteItems/bgm_sub_622288", nil)
+	reqFav.Header.Set("X-Emby-Token", token)
 	wFav := httptest.NewRecorder()
 	r.ServeHTTP(wFav, reqFav)
 	if wFav.Code != http.StatusOK {
@@ -103,6 +121,7 @@ func TestSetupRouter(t *testing.T) {
 
 	// Check Favorite Items list
 	reqFavList := httptest.NewRequest(http.MethodGet, "/emby/Users/admin/Items?Filters=IsFavorite", nil)
+	reqFavList.Header.Set("X-Emby-Token", token)
 	wFavList := httptest.NewRecorder()
 	r.ServeHTTP(wFavList, reqFavList)
 	if wFavList.Code != http.StatusOK {
@@ -114,6 +133,7 @@ func TestSetupRouter(t *testing.T) {
 
 	// Unmark favorite
 	reqUnfav := httptest.NewRequest(http.MethodDelete, "/emby/Users/admin/FavoriteItems/bgm_sub_622288", nil)
+	reqUnfav.Header.Set("X-Emby-Token", token)
 	wUnfav := httptest.NewRecorder()
 	r.ServeHTTP(wUnfav, reqUnfav)
 	if wUnfav.Code != http.StatusOK {
@@ -122,6 +142,7 @@ func TestSetupRouter(t *testing.T) {
 
 	// 6. Test GET /emby/Users/admin/Views
 	reqViews := httptest.NewRequest(http.MethodGet, "/emby/Users/admin/Views?IncludeExternalContent=false&IncludeHidden=false", nil)
+	reqViews.Header.Set("X-Emby-Token", token)
 	wViews := httptest.NewRecorder()
 	r.ServeHTTP(wViews, reqViews)
 	if wViews.Code != http.StatusOK {
@@ -135,6 +156,7 @@ func TestSetupRouter(t *testing.T) {
 
 	// 7. Test GET /emby/Users/admin/Items/Resume (Must return [] not null)
 	reqResume := httptest.NewRequest(http.MethodGet, "/emby/Users/admin/Items/Resume", nil)
+	reqResume.Header.Set("X-Emby-Token", token)
 	wResume := httptest.NewRecorder()
 	r.ServeHTTP(wResume, reqResume)
 	if wResume.Code != http.StatusOK {
@@ -173,6 +195,7 @@ func TestSetupRouter(t *testing.T) {
 
 	// 10. Test GET /emby/Users/admin/Items/Latest (Must return JSON array [ ... ])
 	reqLatest := httptest.NewRequest(http.MethodGet, "/emby/Users/admin/Items/Latest?Limit=10", nil)
+	reqLatest.Header.Set("X-Emby-Token", token)
 	wLatest := httptest.NewRecorder()
 	r.ServeHTTP(wLatest, reqLatest)
 	if wLatest.Code != http.StatusOK {

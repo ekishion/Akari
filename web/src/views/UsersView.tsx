@@ -45,7 +45,13 @@ const itemVariants: Variants = {
 export const UsersView: React.FC<UsersViewProps> = ({ users, onRefresh }) => {
   const [selectedUserForToken, setSelectedUserForToken] = useState<UserView | null>(null)
   const [selectedUserForBgm, setSelectedUserForBgm] = useState<UserView | null>(null)
+  const [selectedUserForPassword, setSelectedUserForPassword] = useState<UserView | null>(null)
   const [isAddUserOpen, setIsAddUserOpen] = useState(false)
+
+  // Edit Password Form State
+  const [userNewPassword, setUserNewPassword] = useState('')
+  const [updatingPassword, setUpdatingPassword] = useState(false)
+  const [updatePasswordError, setUpdatePasswordError] = useState<string | null>(null)
 
   // Add User Form State
   const [newUsername, setNewUsername] = useState('')
@@ -53,6 +59,24 @@ export const UsersView: React.FC<UsersViewProps> = ({ users, onRefresh }) => {
   const [newIsAdmin, setNewIsAdmin] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedUserForPassword) return
+    setUpdatingPassword(true)
+    setUpdatePasswordError(null)
+
+    try {
+      await api.setUserPassword(selectedUserForPassword.id, userNewPassword)
+      setSelectedUserForPassword(null)
+      setUserNewPassword('')
+      onRefresh()
+    } catch (err: any) {
+      setUpdatePasswordError(err.message || '更新密码失败')
+    } finally {
+      setUpdatingPassword(false)
+    }
+  }
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -169,9 +193,19 @@ export const UsersView: React.FC<UsersViewProps> = ({ users, onRefresh }) => {
                     {u.hasPassword ? <Lock className="w-3.5 h-3.5 text-amber-500" /> : <Unlock className="w-3.5 h-3.5 text-[var(--md-on-surface-variant)]" />}
                     <span>密码认证</span>
                   </span>
-                  <span className={u.hasPassword ? 'text-amber-500 font-semibold' : 'text-[var(--md-on-surface-variant)]'}>
-                    {u.hasPassword ? '已设置密码' : '免密直接登录'}
-                  </span>
+                  <button
+                    onClick={() => {
+                      setSelectedUserForPassword(u)
+                      setUserNewPassword('')
+                      setUpdatePasswordError(null)
+                    }}
+                    className={`font-semibold hover:underline cursor-pointer flex items-center gap-1 ${
+                      u.hasPassword ? 'text-amber-500' : 'text-[var(--md-primary)]'
+                    }`}
+                  >
+                    <span>{u.hasPassword ? '已设置密码' : '免密直接登录'}</span>
+                    <span className="text-[10px] opacity-75 font-normal">({u.hasPassword ? '修改' : '去设置'})</span>
+                  </button>
                 </div>
 
                 {/* Bangumi Bind Status */}
@@ -273,6 +307,41 @@ export const UsersView: React.FC<UsersViewProps> = ({ users, onRefresh }) => {
             </MdButton>
             <MdButton type="submit" variant="filled" loading={creating}>
               确认创建
+            </MdButton>
+          </div>
+        </form>
+      </MdDialog>
+
+      {/* Edit Password Dialog */}
+      <MdDialog
+        open={!!selectedUserForPassword}
+        onClose={() => setSelectedUserForPassword(null)}
+        title={`设置/修改密码: ${selectedUserForPassword?.name || ''}`}
+        subtitle="为该用户更新 Emby 客户端与网页端的登录密码。留空并保存则重置为免密直接登录。"
+        icon={<Lock className="w-5 h-5 text-amber-500" />}
+      >
+        <form onSubmit={handleUpdatePassword} className="flex flex-col gap-4">
+          {updatePasswordError && (
+            <div className="p-3 rounded-2xl bg-[var(--md-danger-container)] text-[var(--md-on-danger-container)] text-xs font-semibold">
+              {updatePasswordError}
+            </div>
+          )}
+
+          <MdTextField
+            label="新密码 (Password)"
+            type="password"
+            placeholder="输入新密码，留空则免密"
+            value={userNewPassword}
+            onChange={(e) => setUserNewPassword(e.target.value)}
+            autoFocus
+          />
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-[var(--md-outline-variant)]/60">
+            <MdButton type="button" variant="text" onClick={() => setSelectedUserForPassword(null)}>
+              取消
+            </MdButton>
+            <MdButton type="submit" variant="filled" loading={updatingPassword}>
+              保存密码
             </MdButton>
           </div>
         </form>

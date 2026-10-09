@@ -133,7 +133,13 @@ func TestAdminRouter_Integration(t *testing.T) {
 	}
 
 	// 6. Test FavoriteItems mark and unmark
+	embyToken, err := authSvc.CreateTokenForUser("admin", "TestRunner")
+	if err != nil {
+		t.Fatalf("CreateTokenForUser failed: %v", err)
+	}
+
 	reqFav := httptest.NewRequest(http.MethodPost, "/emby/Users/admin/FavoriteItems/bgm_sub_622288", nil)
+	reqFav.Header.Set("X-Emby-Token", embyToken)
 	wFav := httptest.NewRecorder()
 	router.ServeHTTP(wFav, reqFav)
 	if wFav.Code != http.StatusOK {
@@ -147,6 +153,7 @@ func TestAdminRouter_Integration(t *testing.T) {
 
 	// Unmark favorite
 	reqUnfav := httptest.NewRequest(http.MethodDelete, "/emby/Users/00000000000000000000000000000001/FavoriteItems/bgm_sub_622288", nil)
+	reqUnfav.Header.Set("X-Emby-Token", embyToken)
 	wUnfav := httptest.NewRecorder()
 	router.ServeHTTP(wUnfav, reqUnfav)
 	if wUnfav.Code != http.StatusOK {

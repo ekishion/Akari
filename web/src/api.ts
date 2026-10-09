@@ -139,6 +139,11 @@ export const api = {
       body: JSON.stringify({ username, password, isAdmin }),
     }),
   deleteUser: (id: string) => request<{ status: string }>(`/api/users/${id}`, { method: 'DELETE' }),
+  setUserPassword: (userId: string, password: string) =>
+    request<{ status: string; message: string }>(`/api/users/${userId}/password`, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
   getUserTokens: (userId: string) => request<UserToken[]>(`/api/users/${userId}/tokens`),
   createUserToken: (userId: string, clientName: string) =>
     request<{ token: string; userId: string; clientName: string }>(`/api/users/${userId}/tokens`, {

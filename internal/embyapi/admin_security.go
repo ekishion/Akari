@@ -20,16 +20,18 @@ type AdminSecurityHandler struct {
 	cfg            *config.Config
 	db             *storage.DB
 	adminAuth      *auth.AdminAuthService
+	authSvc        *auth.AuthService
 	ruleMgr        *rules.RuleManager
 	playbackRecord *PlaybackHandler
 	startTime      time.Time
 }
 
-func NewAdminSecurityHandler(cfg *config.Config, db *storage.DB, adminAuth *auth.AdminAuthService, ruleMgr *rules.RuleManager, pbHandler *PlaybackHandler) *AdminSecurityHandler {
+func NewAdminSecurityHandler(cfg *config.Config, db *storage.DB, adminAuth *auth.AdminAuthService, authSvc *auth.AuthService, ruleMgr *rules.RuleManager, pbHandler *PlaybackHandler) *AdminSecurityHandler {
 	return &AdminSecurityHandler{
 		cfg:            cfg,
 		db:             db,
 		adminAuth:      adminAuth,
+		authSvc:        authSvc,
 		ruleMgr:        ruleMgr,
 		playbackRecord: pbHandler,
 		startTime:      time.Now(),
@@ -178,6 +180,10 @@ func (h *AdminSecurityHandler) ChangePassword(c *gin.Context) {
 	if err := h.adminAuth.ChangePassword(username, req.OldPassword, req.NewPassword, clientIP, userAgent); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	if h.authSvc != nil {
+		_ = h.authSvc.UpdatePassword(username, req.NewPassword)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Password changed successfully"})
