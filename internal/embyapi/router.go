@@ -53,7 +53,7 @@ func SetupRouter(
 	viewsHandler := NewViewsHandler(cfg)
 	itemsHandler := NewItemsHandler(cfg, bgmClient, authSvc, db)
 	playbackHandler := NewPlaybackHandler(cfg, bgmClient, ruleMgr, eng, res, danmakuClient, db)
-	adminHandler := NewAdminHandler(cfg, authSvc, ruleMgr, eng, bgmClient, playbackHandler)
+	adminHandler := NewAdminHandler(cfg, authSvc, ruleMgr, eng, bgmClient, playbackHandler, db)
 	wsHandler := NewWebSocketHandler()
 
 	// WebSocket Endpoints
@@ -102,6 +102,16 @@ func SetupRouter(
 		apiGroup.DELETE("/rules/:name", adminHandler.DeleteRule)
 		apiGroup.POST("/rules/import-url", adminHandler.ImportRulesFromURL)
 		apiGroup.POST("/rules/test", adminHandler.TestRule)
+
+		// Aliases & Synonyms
+		apiGroup.GET("/aliases/synonyms", adminHandler.ListGlobalSynonyms)
+		apiGroup.POST("/aliases/synonyms", adminHandler.UpsertGlobalSynonym)
+		apiGroup.DELETE("/aliases/synonyms/:pattern", adminHandler.DeleteGlobalSynonym)
+		apiGroup.POST("/aliases/synonyms/reset", adminHandler.ResetGlobalSynonyms)
+
+		apiGroup.GET("/aliases/subjects", adminHandler.ListSubjectAliases)
+		apiGroup.POST("/aliases/subjects", adminHandler.UpsertSubjectAliases)
+		apiGroup.DELETE("/aliases/subjects/:subject_id", adminHandler.DeleteSubjectAliases)
 
 		// History
 		apiGroup.GET("/history", adminHandler.ListHistory)

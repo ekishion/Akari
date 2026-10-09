@@ -15,10 +15,10 @@ func TestRuleManager_CRUD(t *testing.T) {
 
 	mgr := NewRuleManager(cfg)
 
-	// 1. Check initial seeds
+	// 1. Check initial rules (starts empty, no built-in rules)
 	initialPlugins := mgr.GetAllPlugins()
-	if len(initialPlugins) < 3 {
-		t.Fatalf("expected at least 3 initial seed plugins, got %d", len(initialPlugins))
+	if len(initialPlugins) != 0 {
+		t.Fatalf("expected 0 initial plugins on clean setup, got %d", len(initialPlugins))
 	}
 
 	// 2. Add custom plugin

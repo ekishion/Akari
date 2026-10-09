@@ -1,4 +1,4 @@
-import type { SystemStatus, SystemConfig, UserView, UserToken, RulePlugin, PlaybackHistory, TestResult, MirrorTestResult } from './types'
+import type { SystemStatus, SystemConfig, UserView, UserToken, RulePlugin, PlaybackHistory, TestResult, MirrorTestResult, GlobalSynonym, SubjectAlias } from './types'
 
 const BASE_URL = ''
 
@@ -122,4 +122,26 @@ export const api = {
 
   // Playback History
   listHistory: () => request<PlaybackHistory[]>('/api/history'),
+
+  // Aliases & Synonyms
+  listGlobalSynonyms: () => request<GlobalSynonym[]>('/api/aliases/synonyms'),
+  upsertGlobalSynonym: (pattern: string, replacement: string, enabled: boolean = true) =>
+    request<{ success: boolean }>('/api/aliases/synonyms', {
+      method: 'POST',
+      body: JSON.stringify({ pattern, replacement, enabled }),
+    }),
+  deleteGlobalSynonym: (pattern: string) =>
+    request<{ success: boolean }>(`/api/aliases/synonyms/${encodeURIComponent(pattern)}`, { method: 'DELETE' }),
+  resetGlobalSynonyms: () =>
+    request<{ success: boolean }>('/api/aliases/synonyms/reset', { method: 'POST' }),
+
+  listSubjectAliases: () => request<SubjectAlias[]>('/api/aliases/subjects'),
+  upsertSubjectAliases: (subjectId: number, title: string, aliases: string[]) =>
+    request<{ success: boolean }>('/api/aliases/subjects', {
+      method: 'POST',
+      body: JSON.stringify({ subjectId, title, aliases }),
+    }),
+  deleteSubjectAliases: (subjectId: number) =>
+    request<{ success: boolean }>(`/api/aliases/subjects/${subjectId}`, { method: 'DELETE' }),
 }
+

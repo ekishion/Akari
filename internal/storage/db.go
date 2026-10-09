@@ -141,6 +141,21 @@ func (s *DB) initSchema() error {
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
+	CREATE TABLE IF NOT EXISTS global_synonyms (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		pattern TEXT NOT NULL UNIQUE,
+		replacement TEXT NOT NULL,
+		enabled INTEGER DEFAULT 1,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS subject_aliases (
+		subject_id INTEGER PRIMARY KEY,
+		title TEXT DEFAULT '',
+		aliases_json TEXT NOT NULL,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_tokens_user ON user_tokens(user_id);
 	CREATE INDEX IF NOT EXISTS idx_histories_user ON playback_histories(user_id);
 	`
@@ -149,9 +164,27 @@ func (s *DB) initSchema() error {
 		return err
 	}
 
+	// Seed default global synonyms if empty
+	s.seedDefaultSynonyms()
+
 	// Try adding is_favorite column if upgrading from older schema
 	_, _ = s.db.Exec(`ALTER TABLE playback_histories ADD COLUMN is_favorite INTEGER DEFAULT 0`)
 	return nil
+}
+
+func (s *DB) seedDefaultSynonyms() {
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM global_synonyms`).Scan(&count); err == nil && count == 0 {
+		defaultSeeds := [][2]string{
+			{"超时空", "超"},
+			{"已经死了", "已死"},
+			{"电影版", "剧场版"},
+			{"总集篇", "剧场版"},
+		}
+		for _, pair := range defaultSeeds {
+			_, _ = s.db.Exec(`INSERT OR IGNORE INTO global_synonyms (pattern, replacement, enabled) VALUES (?, ?, 1)`, pair[0], pair[1])
+		}
+	}
 }
 
 func (s *DB) migrateFromJSON() {
@@ -807,4 +840,193 @@ func (s *DB) GetAllSettings() (map[string]string, error) {
 	}
 	return res, nil
 }
+
+// Global Synonyms
+
+type GlobalSynonymRecord struct {
+	ID          int64     `json:"id"`
+	Pattern     string    `json:"pattern"`
+	Replacement string    `json:"replacement"`
+	Enabled     bool      `json:"enabled"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+func (s *DB) GetGlobalSynonyms() (map[string]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(`SELECT pattern, replacement FROM global_synonyms WHERE enabled = 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	res := make(map[string]string)
+	for rows.Next() {
+		var p, r string
+		if err := rows.Scan(&p, &r); err == nil {
+			res[p] = r
+		}
+	}
+	return res, nil
+}
+
+func (s *DB) ListGlobalSynonyms() ([]GlobalSynonymRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(`SELECT id, pattern, replacement, enabled, created_at FROM global_synonyms ORDER BY id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []GlobalSynonymRecord
+	for rows.Next() {
+		var rec GlobalSynonymRecord
+		var enInt int
+		if err := rows.Scan(&rec.ID, &rec.Pattern, &rec.Replacement, &enInt, &rec.CreatedAt); err == nil {
+			rec.Enabled = enInt == 1
+			list = append(list, rec)
+		}
+	}
+	return list, nil
+}
+
+func (s *DB) UpsertGlobalSynonym(pattern, replacement string, enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	enInt := 0
+	if enabled {
+		enInt = 1
+	}
+
+	query := `
+	INSERT INTO global_synonyms (pattern, replacement, enabled)
+	VALUES (?, ?, ?)
+	ON CONFLICT(pattern) DO UPDATE SET
+		replacement = excluded.replacement,
+		enabled = excluded.enabled
+	`
+	_, err := s.db.Exec(query, strings.TrimSpace(pattern), strings.TrimSpace(replacement), enInt)
+	return err
+}
+
+func (s *DB) DeleteGlobalSynonym(id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`DELETE FROM global_synonyms WHERE id = ?`, id)
+	return err
+}
+
+func (s *DB) DeleteGlobalSynonymByPattern(pattern string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`DELETE FROM global_synonyms WHERE pattern = ?`, pattern)
+	return err
+}
+
+func (s *DB) ResetDefaultGlobalSynonyms() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.db.Exec(`DELETE FROM global_synonyms`); err != nil {
+		return err
+	}
+
+	defaultSeeds := [][2]string{
+		{"超时空", "超"},
+		{"已经死了", "已死"},
+		{"电影版", "剧场版"},
+		{"总集篇", "剧场版"},
+	}
+	for _, pair := range defaultSeeds {
+		_, _ = s.db.Exec(`INSERT INTO global_synonyms (pattern, replacement, enabled) VALUES (?, ?, 1)`, pair[0], pair[1])
+	}
+	return nil
+}
+
+// Subject Aliases
+
+type SubjectAliasRecord struct {
+	SubjectID int       `json:"subjectId"`
+	Title     string    `json:"title"`
+	Aliases   []string  `json:"aliases"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+func (s *DB) GetSubjectAliases(subjectId int) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var raw string
+	err := s.db.QueryRow(`SELECT aliases_json FROM subject_aliases WHERE subject_id = ?`, subjectId).Scan(&raw)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var aliases []string
+	if err := json.Unmarshal([]byte(raw), &aliases); err != nil {
+		return nil, err
+	}
+	return aliases, nil
+}
+
+func (s *DB) ListSubjectAliases() ([]SubjectAliasRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(`SELECT subject_id, title, aliases_json, updated_at FROM subject_aliases ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []SubjectAliasRecord
+	for rows.Next() {
+		var rec SubjectAliasRecord
+		var raw string
+		if err := rows.Scan(&rec.SubjectID, &rec.Title, &raw, &rec.UpdatedAt); err == nil {
+			_ = json.Unmarshal([]byte(raw), &rec.Aliases)
+			list = append(list, rec)
+		}
+	}
+	return list, nil
+}
+
+func (s *DB) UpsertSubjectAliases(subjectId int, title string, aliases []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data, err := json.Marshal(aliases)
+	if err != nil {
+		return err
+	}
+
+	query := `
+	INSERT INTO subject_aliases (subject_id, title, aliases_json, updated_at)
+	VALUES (?, ?, ?, ?)
+	ON CONFLICT(subject_id) DO UPDATE SET
+		title = excluded.title,
+		aliases_json = excluded.aliases_json,
+		updated_at = excluded.updated_at
+	`
+	_, err = s.db.Exec(query, subjectId, strings.TrimSpace(title), string(data), time.Now())
+	return err
+}
+
+func (s *DB) DeleteSubjectAliases(subjectId int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`DELETE FROM subject_aliases WHERE subject_id = ?`, subjectId)
+	return err
+}
+
 

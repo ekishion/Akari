@@ -210,3 +210,64 @@ func TestDB_SettingsPersistence(t *testing.T) {
 	}
 }
 
+func TestDB_SynonymsAndAliases(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := &config.Config{DataDir: tempDir}
+	db, err := OpenDB(cfg)
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	defer db.Close()
+
+	// 1. Verify default seeded synonyms
+	syns, err := db.GetGlobalSynonyms()
+	if err != nil {
+		t.Fatalf("GetGlobalSynonyms failed: %v", err)
+	}
+	if syns["超时空"] != "超" || syns["已经死了"] != "已死" {
+		t.Errorf("expected default seeded synonyms, got %+v", syns)
+	}
+
+	// 2. Add custom synonym
+	if err := db.UpsertGlobalSynonym("鬼灭", "鬼灭之刃", true); err != nil {
+		t.Fatalf("UpsertGlobalSynonym failed: %v", err)
+	}
+	synsAfter, _ := db.GetGlobalSynonyms()
+	if synsAfter["鬼灭"] != "鬼灭之刃" {
+		t.Errorf("expected custom synonym, got %+v", synsAfter)
+	}
+
+	// 3. Delete synonym
+	if err := db.DeleteGlobalSynonymByPattern("鬼灭"); err != nil {
+		t.Fatalf("DeleteGlobalSynonymByPattern failed: %v", err)
+	}
+	synsDeleted, _ := db.GetGlobalSynonyms()
+	if _, exists := synsDeleted["鬼灭"]; exists {
+		t.Errorf("expected synonym to be deleted")
+	}
+
+	// 4. Subject Aliases CRUD
+	if err := db.UpsertSubjectAliases(604826, "超辉夜姬！", []string{"超时空辉夜姬", "超辉夜姬剧场版"}); err != nil {
+		t.Fatalf("UpsertSubjectAliases failed: %v", err)
+	}
+
+	aliases, err := db.GetSubjectAliases(604826)
+	if err != nil || len(aliases) != 2 {
+		t.Fatalf("expected 2 aliases, got %v (err: %v)", aliases, err)
+	}
+
+	list, err := db.ListSubjectAliases()
+	if err != nil || len(list) != 1 || list[0].SubjectID != 604826 {
+		t.Errorf("unexpected ListSubjectAliases: %+v", list)
+	}
+
+	if err := db.DeleteSubjectAliases(604826); err != nil {
+		t.Fatalf("DeleteSubjectAliases failed: %v", err)
+	}
+	aliasesAfter, _ := db.GetSubjectAliases(604826)
+	if len(aliasesAfter) != 0 {
+		t.Errorf("expected 0 aliases after deletion, got %v", aliasesAfter)
+	}
+}
+
+

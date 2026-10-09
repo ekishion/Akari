@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"akari-bridge/internal/engine"
 	"akari-bridge/internal/model"
 	"akari-bridge/internal/rules"
+	"akari-bridge/internal/storage"
 )
 
 var startTime = time.Now()
@@ -26,6 +28,7 @@ type AdminHandler struct {
 	eng           *engine.Engine
 	bgmClient     *bangumi.Client
 	playbackProxy *PlaybackHandler
+	db            *storage.DB
 }
 
 func NewAdminHandler(
@@ -35,6 +38,7 @@ func NewAdminHandler(
 	eng *engine.Engine,
 	bgmClient *bangumi.Client,
 	playbackProxy *PlaybackHandler,
+	db *storage.DB,
 ) *AdminHandler {
 	return &AdminHandler{
 		cfg:           cfg,
@@ -43,6 +47,7 @@ func NewAdminHandler(
 		eng:           eng,
 		bgmClient:     bgmClient,
 		playbackProxy: playbackProxy,
+		db:            db,
 	}
 }
 
@@ -564,4 +569,121 @@ func (h *AdminHandler) ListHistory(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, histories)
+}
+
+// Synonyms & Aliases APIs
+
+func (h *AdminHandler) ListGlobalSynonyms(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusOK, []any{})
+		return
+	}
+	list, err := h.db.ListGlobalSynonyms()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, list)
+}
+
+func (h *AdminHandler) UpsertGlobalSynonym(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database not initialized"})
+		return
+	}
+	var req struct {
+		Pattern     string `json:"pattern"`
+		Replacement string `json:"replacement"`
+		Enabled     bool   `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Pattern) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Pattern is required"})
+		return
+	}
+	if err := h.db.UpsertGlobalSynonym(req.Pattern, req.Replacement, req.Enabled); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func (h *AdminHandler) DeleteGlobalSynonym(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database not initialized"})
+		return
+	}
+	pat := c.Param("pattern")
+	if pat == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Pattern parameter is required"})
+		return
+	}
+	if err := h.db.DeleteGlobalSynonymByPattern(pat); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func (h *AdminHandler) ResetGlobalSynonyms(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database not initialized"})
+		return
+	}
+	if err := h.db.ResetDefaultGlobalSynonyms(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func (h *AdminHandler) ListSubjectAliases(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusOK, []any{})
+		return
+	}
+	list, err := h.db.ListSubjectAliases()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, list)
+}
+
+func (h *AdminHandler) UpsertSubjectAliases(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database not initialized"})
+		return
+	}
+	var req struct {
+		SubjectID int      `json:"subjectId"`
+		Title     string   `json:"title"`
+		Aliases   []string `json:"aliases"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.SubjectID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Valid subjectId is required"})
+		return
+	}
+	if err := h.db.UpsertSubjectAliases(req.SubjectID, req.Title, req.Aliases); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func (h *AdminHandler) DeleteSubjectAliases(c *gin.Context) {
+	if h.db == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database not initialized"})
+		return
+	}
+	idStr := c.Param("subject_id")
+	subId, err := strconv.Atoi(idStr)
+	if err != nil || subId <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid subject_id"})
+		return
+	}
+	if err := h.db.DeleteSubjectAliases(subId); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }

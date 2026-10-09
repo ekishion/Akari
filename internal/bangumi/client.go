@@ -37,9 +37,18 @@ type BangumiSubject struct {
 	AirWeekday  int               `json:"air_weekday"`
 	RatingScore float64           `json:"score"`
 	Rank        int               `json:"rank"`
+	Platform    string            `json:"platform"`
+	Eps         int               `json:"eps"`
+	MetaTags    []string          `json:"meta_tags"`
 	Images      map[string]string `json:"images"`
 	Tags        []SubjectTag      `json:"tags"`
+	Infobox     []InfoboxItem     `json:"infobox"`
 	TotalEps    int               `json:"total_episodes"`
+}
+
+type InfoboxItem struct {
+	Key   string          `json:"key"`
+	Value json.RawMessage `json:"value"`
 }
 
 type subjectAlias BangumiSubject
@@ -61,12 +70,91 @@ func (s *BangumiSubject) UnmarshalJSON(data []byte) error {
 	if s.AirDate == "" && r.AirDate != "" {
 		s.AirDate = r.AirDate
 	}
+	if s.TotalEps == 0 && s.Eps > 0 {
+		s.TotalEps = s.Eps
+	}
 	return nil
+}
+
+func (s *BangumiSubject) IsMovie() bool {
+	if s == nil {
+		return false
+	}
+	if strings.Contains(s.Platform, "剧场版") || strings.Contains(s.Platform, "电影") {
+		return true
+	}
+	for _, m := range s.MetaTags {
+		if strings.Contains(m, "剧场版") || strings.Contains(m, "电影") {
+			return true
+		}
+	}
+	for _, t := range s.Tags {
+		if (t.Name == "剧场版" || t.Name == "动画电影" || t.Name == "电影" || t.Name == "电影版") && t.Count >= 2 {
+			return true
+		}
+	}
+	// TotalEps is 1 and name has format keyword
+	name := strings.ToLower(s.Name + " " + s.NameCn)
+	if s.TotalEps == 1 && (strings.Contains(name, "剧场版") || strings.Contains(name, "电影") || strings.Contains(name, "movie")) {
+		return true
+	}
+	return false
 }
 
 type SubjectTag struct {
 	Name  string `json:"name"`
 	Count int    `json:"count"`
+}
+
+func (s *BangumiSubject) ExtractAliases() []string {
+	seen := make(map[string]bool)
+	var aliases []string
+
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[strings.ToLower(v)] {
+			return
+		}
+		if strings.EqualFold(v, s.Name) || strings.EqualFold(v, s.NameCn) {
+			return
+		}
+		seen[strings.ToLower(v)] = true
+		aliases = append(aliases, v)
+	}
+
+	// 1. Parse Infobox (official aliases)
+	for _, info := range s.Infobox {
+		key := strings.ToLower(strings.TrimSpace(info.Key))
+		if key == "别名" || key == "alias" || key == "aliases" || key == "又名" || key == "中文名" || key == "英文名" || key == "日文名" {
+			if len(info.Value) == 0 {
+				continue
+			}
+			var strVal string
+			if err := json.Unmarshal(info.Value, &strVal); err == nil {
+				add(strVal)
+				continue
+			}
+			var objArr []struct {
+				V string `json:"v"`
+			}
+			if err := json.Unmarshal(info.Value, &objArr); err == nil {
+				for _, o := range objArr {
+					add(o.V)
+				}
+				continue
+			}
+			var strArr []string
+			if err := json.Unmarshal(info.Value, &strArr); err == nil {
+				for _, str := range strArr {
+					add(str)
+				}
+				continue
+			}
+		}
+	}
+
+	// Return parsed aliases from Infobox
+	return aliases
 }
 
 type BangumiEpisode struct {

@@ -125,14 +125,29 @@ func (h *PlaybackHandler) GetPlaybackInfo(c *gin.Context) {
 		return
 	}
 
-	// Fetch subject metadata from Bangumi to obtain original Japanese & Chinese titles
 	var origTitle, cnTitle string
+	var extraAliases []string
+	var isMovie bool
 	subId, _ := mapper.ExtractEpisodeInfo(itemId)
 	if subId > 0 {
 		if sub, err := h.bangumiClient.GetSubject(subId); err == nil && sub != nil {
 			origTitle = sub.Name
 			cnTitle = sub.NameCn
+			isMovie = sub.IsMovie()
+			// Automatically harvest aliases from Bangumi Infobox and Tags
+			extraAliases = append(extraAliases, sub.ExtractAliases()...)
 		}
+		// Also fetch user-configured custom aliases from DB
+		if h.db != nil {
+			if customAliases, err := h.db.GetSubjectAliases(subId); err == nil && len(customAliases) > 0 {
+				extraAliases = append(extraAliases, customAliases...)
+			}
+		}
+	}
+
+	var synonyms map[string]string
+	if h.db != nil {
+		synonyms, _ = h.db.GetGlobalSynonyms()
 	}
 
 	// 2. SingleFlight: coalesce concurrent PlaybackInfo requests for the same item
@@ -142,17 +157,21 @@ func (h *PlaybackHandler) GetPlaybackInfo(c *gin.Context) {
 			return &resolveResult{resolved: cachedRes, targetPlugin: cachedPlugin}, nil
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		defer cancel()
+		// Step 1: Perform multi-variant search with dedicated timeout
+		searchCtx, cancelSearch := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancelSearch()
 
-		queries := engine.GenerateSearchQueries(title, origTitle, cnTitle)
-		log.Printf("[Playback] Search queries for '%s': %v", title, queries)
+		queries := engine.GenerateSearchQueries(title, origTitle, cnTitle, isMovie, synonyms, extraAliases...)
+		if len(queries) > 6 {
+			queries = queries[:6]
+		}
+		log.Printf("[Playback] Search queries for '%s' (isMovie=%v): %v", title, isMovie, queries)
 
 		seenCandidate := make(map[string]bool)
 		var rawCandidates []engine.SearchItem
 
-		for idx, q := range queries {
-			results := h.engine.SearchMulti(ctx, enabledPlugins, q)
+		for _, q := range queries {
+			results := h.engine.SearchMulti(searchCtx, enabledPlugins, q)
 			for _, r := range results {
 				key := r.PluginName + ":" + r.Src
 				if !seenCandidate[key] {
@@ -162,10 +181,10 @@ func (h *PlaybackHandler) GetPlaybackInfo(c *gin.Context) {
 			}
 
 			// If we found an exact/high-confidence match (score >= 95), stop querying more variants
-			if idx >= 1 && len(rawCandidates) > 0 {
+			if len(rawCandidates) > 0 {
 				hasHighConfidence := false
 				for _, r := range rawCandidates {
-					if engine.ScoreCandidate(title, r.Name) >= 95 {
+					if engine.ScoreCandidate(title, r.Name, isMovie, synonyms) >= 95 {
 						hasHighConfidence = true
 						break
 					}
@@ -176,7 +195,7 @@ func (h *PlaybackHandler) GetPlaybackInfo(c *gin.Context) {
 			}
 		}
 
-		ranked := rankSearchResults(rawCandidates, title)
+		ranked := rankSearchResults(rawCandidates, title, isMovie, synonyms)
 		if len(ranked) == 0 {
 			log.Printf("[Playback] No valid candidates found matching '%s'", title)
 			return &resolveResult{notFound: true, errMsg: "No matching anime source found"}, nil
@@ -196,10 +215,26 @@ func (h *PlaybackHandler) GetPlaybackInfo(c *gin.Context) {
 				continue
 			}
 
-			roads, err := h.engine.QueryChapters(ctx, plugin, item.Src)
+			chapterCtx, cancelChapter := context.WithTimeout(context.Background(), 6*time.Second)
+			roads, err := h.engine.QueryChapters(chapterCtx, plugin, item.Src)
+			cancelChapter()
 			if err != nil || len(roads) == 0 {
 				log.Printf("[Playback] Rule '%s' chapters query failed for %s: %v", plugin.Name, item.Src, err)
 				continue
+			}
+
+			// If target is a movie, skip candidates that clearly represent a multi-episode TV series
+			if isMovie && len(ranked) > 1 {
+				maxRoadEps := 0
+				for _, rd := range roads {
+					if len(rd.Data) > maxRoadEps {
+						maxRoadEps = len(rd.Data)
+					}
+				}
+				if maxRoadEps > 3 {
+					log.Printf("[Playback] Candidate '%s' (%s) has %d episodes but target is a movie; skipping to movie candidate", item.Name, plugin.Name, maxRoadEps)
+					continue
+				}
 			}
 
 			playURL := findEpisodeURL(roads, epIndex, epSort)
@@ -211,7 +246,7 @@ func (h *PlaybackHandler) GetPlaybackInfo(c *gin.Context) {
 			anyCandidateHadEpisode = true
 
 			log.Printf("[Playback] Trying candidate rule '%s' ('%s'), episode page: %s", plugin.Name, item.Name, playURL)
-			resolveCtx, cancelResolve := context.WithTimeout(ctx, 10*time.Second)
+			resolveCtx, cancelResolve := context.WithTimeout(context.Background(), 8*time.Second)
 			res, err := h.streamResolver.Resolve(resolveCtx, playURL, plugin.Referer, plugin.UserAgent)
 			cancelResolve()
 
@@ -221,7 +256,7 @@ func (h *PlaybackHandler) GetPlaybackInfo(c *gin.Context) {
 			}
 
 			// Verify whether the stream is actually playable (avoid handing dead/400 URLs to players)
-			verifyCtx, cancelVerify := context.WithTimeout(ctx, 10*time.Second)
+			verifyCtx, cancelVerify := context.WithTimeout(context.Background(), 6*time.Second)
 			playableURL, ok := h.streamResolver.VerifyPlayable(verifyCtx, res)
 			cancelVerify()
 			if !ok {
@@ -507,13 +542,13 @@ type scoredCandidate struct {
 }
 
 // rankSearchResults orders search hits by title similarity to the target and filters out mismatches (<40).
-func rankSearchResults(items []engine.SearchItem, target string) []engine.SearchItem {
+func rankSearchResults(items []engine.SearchItem, target string, isMovie bool, synonyms ...map[string]string) []engine.SearchItem {
 	if len(items) == 0 {
 		return items
 	}
 	scored := make([]scoredCandidate, 0, len(items))
 	for _, it := range items {
-		s := engine.ScoreCandidate(target, it.Name)
+		s := engine.ScoreCandidate(target, it.Name, isMovie, synonyms...)
 		if s >= 40 {
 			scored = append(scored, scoredCandidate{item: it, score: s})
 		} else {

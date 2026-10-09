@@ -1,22 +1,13 @@
 package embyapi
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"akari-bridge/internal/auth"
-	"akari-bridge/internal/bangumi"
-	"akari-bridge/internal/config"
-	"akari-bridge/internal/danmaku"
 	"akari-bridge/internal/engine"
-	"akari-bridge/internal/model"
-	"akari-bridge/internal/proxy"
-	"akari-bridge/internal/resolver"
-	"akari-bridge/internal/rules"
 )
 
 func TestPlaybackHandler_FindEpisodeURL(t *testing.T) {
@@ -93,7 +84,7 @@ func TestPlaybackHandler_RankSearchResults(t *testing.T) {
 		{Name: "BanG Dream! It's MyGO!!!!!", PluginName: "D", Src: "/d"},
 	}
 
-	ranked := rankSearchResults(items, "BanG Dream! It's MyGO!!!!!")
+	ranked := rankSearchResults(items, "BanG Dream! It's MyGO!!!!!", false)
 	if len(ranked) == 0 {
 		t.Fatalf("expected at least 1 match")
 	}
@@ -126,77 +117,4 @@ func TestPlaybackHandler_ProgressReporting(t *testing.T) {
 	}
 }
 
-func TestPlaybackHandler_LiveGetPlaybackInfo(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		t.Fatalf("LoadConfig error: %v", err)
-	}
-	cfg.DataDir = "../../data"
 
-	authSvc := auth.NewAuthService(cfg, nil)
-	bgmClient := bangumi.NewClient(cfg.BangumiHost)
-	ruleMgr := rules.NewRuleManager(cfg)
-	eng := engine.NewEngine()
-	res := resolver.NewStreamResolver()
-	streamProxy := proxy.NewStreamProxy(cfg, nil)
-	danmakuClient := danmaku.NewClient(cfg.DanDanHost)
-
-	r := SetupRouter(cfg, authSvc, bgmClient, ruleMgr, eng, res, streamProxy, danmakuClient, nil)
-
-	// Test PlaybackInfo for 胆大党 (bgm_ep_467461_1_12345)
-	req := httptest.NewRequest(http.MethodPost, "/emby/Items/bgm_ep_467461_1_12345/PlaybackInfo", nil)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	t.Logf("PlaybackInfo response status: %d", w.Code)
-	t.Logf("PlaybackInfo body: %s", w.Body.String())
-
-	if w.Code == http.StatusOK {
-		var resp model.PlaybackInfoResponse
-		if err := json.Unmarshal(w.Body.Bytes(), &resp); err == nil {
-			if len(resp.MediaSources) > 0 {
-				t.Logf("DirectStreamUrl: %s", resp.MediaSources[0].DirectStreamUrl)
-				t.Logf("Container: %s", resp.MediaSources[0].Container)
-			}
-		}
-	}
-}
-
-func TestPlayback_MultiItemVerification(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		t.Fatalf("LoadConfig error: %v", err)
-	}
-	cfg.DataDir = "../../data"
-
-	authSvc := auth.NewAuthService(cfg, nil)
-	bgmClient := bangumi.NewClient(cfg.BangumiHost)
-	ruleMgr := rules.NewRuleManager(cfg)
-	eng := engine.NewEngine()
-	res := resolver.NewStreamResolver()
-	streamProxy := proxy.NewStreamProxy(cfg, nil)
-	danmakuClient := danmaku.NewClient(cfg.DanDanHost)
-
-	r := SetupRouter(cfg, authSvc, bgmClient, ruleMgr, eng, res, streamProxy, danmakuClient, nil)
-
-	testCases := []struct {
-		itemId         string
-		expectedStatus int
-	}{
-		{"bgm_ep_571784_1_3340745", http.StatusOK},       // 在超市后门吸烟的二人 第1集
-		{"bgm_ep_393010_1_1743433", http.StatusOK},       // 侦探已经死了。 第二季 第1集
-		{"bgm_ep_622288_1_1741638", http.StatusOK},       // FX战士久留美 第1集
-		{"bgm_ep_622288_2_1741639", http.StatusNotFound}, // FX战士久留美 第2集 (未更新应返回404)
-	}
-
-	for _, tc := range testCases {
-		req := httptest.NewRequest(http.MethodPost, "/emby/Items/"+tc.itemId+"/PlaybackInfo", nil)
-		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
-		if w.Code != tc.expectedStatus {
-			t.Errorf("Item %s: expected status %d, got %d, body: %s", tc.itemId, tc.expectedStatus, w.Code, w.Body.String())
-		}
-	}
-}

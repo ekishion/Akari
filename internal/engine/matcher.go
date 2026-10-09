@@ -69,18 +69,24 @@ func ExtractSeasonNumber(title string) int {
 }
 
 // CleanTitle removes punctuation and normalizes characters for comparison
-func CleanTitle(s string) string {
+func CleanTitle(s string, synonyms ...map[string]string) string {
 	s = strings.ToLower(s)
-	// Replace common synonyms
-	s = strings.ReplaceAll(s, "已经死了", "已死")
+	for _, synMap := range synonyms {
+		for k, v := range synMap {
+			if k != "" && v != "" {
+				s = strings.ReplaceAll(s, strings.ToLower(k), strings.ToLower(v))
+			}
+		}
+	}
 	s = rePunctuation.ReplaceAllString(s, "")
 	return s
 }
 
 func stripFormatWords(s string) string {
-	s = strings.ReplaceAll(s, "剧场版", "")
+	s = strings.ReplaceAll(s, "大电影", "")
 	s = strings.ReplaceAll(s, "动画电影", "")
 	s = strings.ReplaceAll(s, "电影版", "")
+	s = strings.ReplaceAll(s, "剧场版", "")
 	s = strings.ReplaceAll(s, "电影", "")
 	s = strings.ReplaceAll(s, "特别篇", "")
 	s = strings.ReplaceAll(s, "总集篇", "")
@@ -90,17 +96,58 @@ func stripFormatWords(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// ScoreCandidate evaluates how closely candidate matches target (0-100)
-func ScoreCandidate(target, candidate string) int {
-	targetClean := CleanTitle(target)
-	candClean := CleanTitle(candidate)
+func hasFormatWords(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.Contains(lower, "剧场版") ||
+		strings.Contains(lower, "电影版") ||
+		strings.Contains(lower, "大电影") ||
+		strings.Contains(lower, "电影") ||
+		strings.Contains(lower, "动画电影") ||
+		strings.Contains(lower, "movie")
+}
+
+// ScoreCandidate evaluates how closely candidate matches target (0-100) with movie/TV awareness
+func ScoreCandidate(target, candidate string, isMovie bool, synonyms ...map[string]string) int {
+	var syn map[string]string
+	if len(synonyms) > 0 {
+		syn = synonyms[0]
+	}
+	targetClean := CleanTitle(target, syn)
+	candClean := CleanTitle(candidate, syn)
 
 	if targetClean == "" || candClean == "" {
 		return 0
 	}
 
-	// Exact normalized match
+	candHasFormat := hasFormatWords(candidate) || hasFormatWords(candClean)
+	targetHasFormat := hasFormatWords(target) || hasFormatWords(targetClean)
+
+	targetBase := stripFormatWords(targetClean)
+	candBase := stripFormatWords(candClean)
+
+	// Target is TV series, but candidate is a movie/theatrical edition
+	if !isMovie && !targetHasFormat && candHasFormat {
+		return 20 // Heavy penalty to prevent playing movie when watching TV series
+	}
+
+	// Exact base match handling (e.g. "罗小黑战记" vs "罗小黑战记 电影版")
+	if targetBase != "" && candBase != "" && targetBase == candBase {
+		if isMovie {
+			if candHasFormat {
+				return 100 // Exact movie target matching explicit movie candidate
+			}
+			return 70 // Exact base match but lacks movie marker, ranks below explicit movie
+		}
+		if !candHasFormat {
+			return 100 // Exact TV series match
+		}
+	}
+
+	// Exact normalized string match
 	if targetClean == candClean {
+		if isMovie && !candHasFormat {
+			return 75 // Plain name without movie marker when target is movie
+		}
 		return 100
 	}
 
@@ -120,19 +167,33 @@ func ScoreCandidate(target, candidate string) int {
 		return 15 // Very heavy penalty
 	}
 
-	// Distinct franchise sub-brands
-	if strings.Contains(targetClean, "mygo") != strings.Contains(candClean, "mygo") {
-		return 10
-	}
-	if strings.Contains(targetClean, "avemujica") != strings.Contains(candClean, "avemujica") {
-		return 10
+	rTarget := []rune(targetClean)
+	rCand := []rune(candClean)
+	lenMin := min(len(rTarget), len(rCand))
+	lenMax := max(len(rTarget), len(rCand))
+	lenRatio := float64(lenMin) / float64(lenMax)
+
+	// Check common prefix for distinct franchise sub-brand / subtitle divergence
+	commonPrefixLen := 0
+	for commonPrefixLen < lenMin && rTarget[commonPrefixLen] == rCand[commonPrefixLen] {
+		commonPrefixLen++
 	}
 
-	// Base format comparison (e.g. "超辉夜姬！" vs "超辉夜姬 剧场版" or "鬼灭之刃 无限列车篇" vs "鬼灭之刃 剧场版 无限列车篇")
-	targetBase := stripFormatWords(targetClean)
-	candBase := stripFormatWords(candClean)
-	if targetBase != "" && candBase != "" && targetBase == candBase {
-		return 95
+	targetRemainder := len(rTarget) - commonPrefixLen
+	candRemainder := len(rCand) - commonPrefixLen
+
+	// Subtitle divergence: shared franchise prefix but diverging into different sub-titles
+	// e.g. "bangdream" + "itsmygo" (7 chars) vs "bangdream" + "avemujica" (9 chars)
+	if commonPrefixLen >= 4 && targetRemainder >= 3 && candRemainder >= 3 {
+		return 15 // Distinct divergent spinoffs/subtitles
+	}
+
+	// Missing major subtitle: one is a prefix of the other, but missing a substantial subtitle
+	// e.g. "bangdreamitsmygo" vs "bangdream" (target has 7 extra chars, lenRatio < 0.70)
+	if (strings.Contains(candClean, targetClean) || strings.Contains(targetClean, candClean)) && lenRatio < 0.70 && (lenMax-lenMin) >= 4 {
+		if targetBase != candBase {
+			return 20 // Missing major subtitle / parent franchise mismatch
+		}
 	}
 
 	// Calculate character overlap ratio
@@ -153,9 +214,15 @@ func ScoreCandidate(target, candidate string) int {
 		score += 20
 	}
 
-	if strings.Contains(candClean, targetClean) || strings.Contains(targetClean, candClean) ||
-		(targetBase != "" && (strings.Contains(candBase, targetBase) || strings.Contains(targetBase, candBase))) {
+	if isMovie && candHasFormat {
 		score += 15
+	}
+
+	if lenRatio >= 0.75 {
+		if strings.Contains(candClean, targetClean) || strings.Contains(targetClean, candClean) ||
+			(targetBase != "" && (strings.Contains(candBase, targetBase) || strings.Contains(targetBase, candBase))) {
+			score += 15
+		}
 	}
 
 	if score > 100 {
@@ -212,8 +279,8 @@ func max(a, b int) int {
 	return b
 }
 
-// GenerateSearchQueries generates all reasonable search variants for a target title
-func GenerateSearchQueries(title, originalTitle, cnTitle string) []string {
+// GenerateSearchQueries generates all reasonable search variants for a target title dynamically
+func GenerateSearchQueries(title, originalTitle, cnTitle string, isMovie bool, synonyms map[string]string, extraAliases ...string) []string {
 	seen := make(map[string]bool)
 	var list []string
 
@@ -225,14 +292,29 @@ func GenerateSearchQueries(title, originalTitle, cnTitle string) []string {
 		}
 	}
 
-	// 1. Raw title
-	add(title)
+	// If target is a Movie / 剧场版, prioritize movie query variants first
+	if isMovie {
+		for _, baseT := range []string{title, cnTitle} {
+			if baseT != "" {
+				cleanB := rePunctuation.ReplaceAllString(baseT, "")
+				if !hasFormatWords(cleanB) {
+					add(cleanB + " 电影版")
+					add(cleanB + " 剧场版")
+					add(cleanB + "电影版")
+					add(cleanB + "剧场版")
+					add(cleanB + "大电影")
+					add(cleanB + " 电影")
+				}
+			}
+		}
+	}
 
-	// 2. Original & CN title from Bangumi
+	// 1. Raw title, CN title, and original title
+	add(title)
 	add(cnTitle)
 	add(originalTitle)
 
-	// 3. Punctuation stripped
+	// 2. Punctuation stripped
 	cleaned := rePunctuation.ReplaceAllString(title, " ")
 	add(cleaned)
 	noPunct := rePunctuation.ReplaceAllString(title, "")
@@ -252,24 +334,17 @@ func GenerateSearchQueries(title, originalTitle, cnTitle string) []string {
 		add(cnNoPunct)
 	}
 
-	// 4. Spaced title (e.g. "FX战士久留美" -> "FX 战士久留美")
+	// 3. Spaced alphanumeric title (e.g. "FX战士久留美" -> "FX 战士久留美")
 	spaced := reAlphaHan.ReplaceAllString(title, "$1 $2")
 	add(spaced)
 
-	// 5. Chinese synonyms (e.g. "侦探已经死了" -> "侦探已死")
-	if strings.Contains(title, "已经死了") {
-		add(strings.ReplaceAll(title, "已经死了", "已死"))
-		add(strings.ReplaceAll(cleaned, "已经死了", "已死"))
-		add(strings.ReplaceAll(noPunct, "已经死了", "已死"))
-	}
-
-	// 6. Base title without format words
+	// 4. Base title without format words
 	baseNoFormat := strings.TrimSpace(stripFormatWords(noPunct))
 	if baseNoFormat != "" && baseNoFormat != noPunct {
 		add(baseNoFormat)
 	}
 
-	// 7. Base title without season suffix
+	// 5. Base title without season suffix
 	reSeasonSuffix := regexp.MustCompile(`(?i)(?:第[0-9一二三四五]季|season\s*[0-9]+|s[0-9]+)$`)
 	base := strings.TrimSpace(reSeasonSuffix.ReplaceAllString(strings.TrimSpace(cleaned), ""))
 	if base != "" && base != cleaned {
@@ -277,16 +352,78 @@ func GenerateSearchQueries(title, originalTitle, cnTitle string) []string {
 		add(rePunctuation.ReplaceAllString(base, ""))
 	}
 
-	// 8. Subtitle / Spinoff keywords for long titles
-	if strings.Contains(strings.ToLower(title), "mygo") {
-		add("MyGO")
-		add("BanG Dream")
-	}
-	if strings.Contains(strings.ToLower(title), "ave mujica") {
-		add("Ave Mujica")
+	// 6. Dynamic Synonym Applications (bidirectional matching and prefix swapping)
+	currentSnap := make([]string, len(list))
+	copy(currentSnap, list)
+
+	for _, item := range currentSnap {
+		for pat, rep := range synonyms {
+			if pat == "" || rep == "" {
+				continue
+			}
+			// Replace pattern with replacement
+			if strings.Contains(item, pat) {
+				subbed := strings.ReplaceAll(item, pat, rep)
+				add(subbed)
+				add(rePunctuation.ReplaceAllString(subbed, ""))
+			}
+			// Replace replacement with pattern (bidirectional)
+			if strings.Contains(item, rep) {
+				subbed := strings.ReplaceAll(item, rep, pat)
+				add(subbed)
+				add(rePunctuation.ReplaceAllString(subbed, ""))
+			}
+			// Prefix swapping
+			if strings.HasPrefix(item, pat) {
+				trimmed := strings.TrimPrefix(item, pat)
+				add(rep + trimmed)
+				if len([]rune(trimmed)) >= 2 {
+					add(trimmed)
+				}
+			} else if strings.HasPrefix(item, rep) {
+				trimmed := strings.TrimPrefix(item, rep)
+				add(pat + trimmed)
+				if len([]rune(trimmed)) >= 2 {
+					add(trimmed)
+				}
+			}
+		}
 	}
 
-	// 9. If original title has season, extract base of original title
+	// 7. Extra Aliases (from Bangumi Infobox/Tags and DB Subject Aliases)
+	for _, alias := range extraAliases {
+		add(alias)
+		aliasNoP := rePunctuation.ReplaceAllString(alias, "")
+		add(aliasNoP)
+
+		// Apply dynamic synonyms to extra aliases
+		for pat, rep := range synonyms {
+			if pat == "" || rep == "" {
+				continue
+			}
+			if strings.Contains(aliasNoP, pat) {
+				add(strings.ReplaceAll(aliasNoP, pat, rep))
+			}
+			if strings.Contains(aliasNoP, rep) {
+				add(strings.ReplaceAll(aliasNoP, rep, pat))
+			}
+			if strings.HasPrefix(aliasNoP, pat) {
+				trimmed := strings.TrimPrefix(aliasNoP, pat)
+				add(rep + trimmed)
+				if len([]rune(trimmed)) >= 2 {
+					add(trimmed)
+				}
+			} else if strings.HasPrefix(aliasNoP, rep) {
+				trimmed := strings.TrimPrefix(aliasNoP, rep)
+				add(pat + trimmed)
+				if len([]rune(trimmed)) >= 2 {
+					add(trimmed)
+				}
+			}
+		}
+	}
+
+	// 8. If original title has season, extract base of original title
 	if originalTitle != "" {
 		origBase := strings.TrimSpace(reSeasonSuffix.ReplaceAllString(strings.TrimSpace(originalTitle), ""))
 		if origBase != "" {

@@ -111,3 +111,19 @@ export interface MirrorTestResult {
   message?: string
 }
 
+export interface GlobalSynonym {
+  id: number
+  pattern: string
+  replacement: string
+  enabled: boolean
+  createdAt: string
+}
+
+export interface SubjectAlias {
+  subjectId: number
+  title: string
+  aliases: string[]
+  updatedAt: string
+}
+
+
