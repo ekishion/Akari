@@ -1,13 +1,17 @@
 package embyapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"akari-bridge/internal/bilibili"
+	"akari-bridge/internal/config"
 	"akari-bridge/internal/engine"
+	"akari-bridge/internal/resolver"
 )
 
 func TestPlaybackHandler_FindEpisodeURL(t *testing.T) {
@@ -97,6 +101,107 @@ func TestPlaybackHandler_RankSearchResults(t *testing.T) {
 		if it.Name == "BanG Dream!" || it.Name == "BanG Dream! 第二季" {
 			t.Fatalf("unrelated season should be rejected from candidates, but found: %s", it.Name)
 		}
+	}
+}
+
+func TestPlaybackHandler_MultiMediaSourcesResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{
+		HttpPort:   8096,
+		PublicHost: "127.0.0.1",
+	}
+	handler := &PlaybackHandler{
+		cfg: cfg,
+	}
+
+	biliStream := &bilibili.ResolvedBiliStream{
+		QualityLabel: "1080P 高清",
+		Codec:        "h264",
+		IsDASH:       false,
+		SingleURL:    "https://upos.bilivideo.com/video.mp4",
+		Referer:      "https://www.bilibili.com/",
+		UserAgent:    "Mozilla/5.0",
+	}
+
+	ruleStreams := []VerifiedRuleStream{
+		{
+			Plugin: &engine.Plugin{Name: "baimao"},
+			Resolved: &resolver.ResolvedStream{
+				RealURL: "https://baimao.com/stream.m3u8",
+				Format:  "m3u8",
+			},
+			Score: 90,
+		},
+		{
+			Plugin: &engine.Plugin{Name: "AGE"},
+			Resolved: &resolver.ResolvedStream{
+				RealURL: "https://age.com/stream.m3u8",
+				Format:  "m3u8",
+			},
+			Score: 85,
+		},
+	}
+
+	r := gin.New()
+	r.POST("/emby/Items/:id/PlaybackInfo", func(c *gin.Context) {
+		handler.respondPlaybackInfo(c, c.Param("id"), biliStream, ruleStreams)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/emby/Items/bgm_ep_13603_1_78326/PlaybackInfo", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", w.Code)
+	}
+
+	var resp struct {
+		PlaySessionId string `json:"PlaySessionId"`
+		MediaSources  []struct {
+			Id              string `json:"Id"`
+			Name            string `json:"Name"`
+			Container       string `json:"Container"`
+			DirectStreamUrl string `json:"DirectStreamUrl"`
+			MediaStreams    []struct {
+				Type string `json:"Type"`
+			} `json:"MediaStreams"`
+		} `json:"MediaSources"`
+	}
+
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if len(resp.MediaSources) != 3 {
+		t.Fatalf("expected 3 MediaSources (Bilibili + 2 rules), got %d", len(resp.MediaSources))
+	}
+
+	// 1st MediaSource should be Bilibili
+	if resp.MediaSources[0].Id != "akari_src_bilibili" {
+		t.Fatalf("expected 1st source to be Bilibili, got %s", resp.MediaSources[0].Id)
+	}
+	if !strings.Contains(resp.MediaSources[0].Name, "哔哩哔哩") {
+		t.Fatalf("expected Bilibili name label, got %s", resp.MediaSources[0].Name)
+	}
+
+	// 2nd and 3rd should be baimao and AGE
+	if resp.MediaSources[1].Id != "akari_src_baimao_1" || resp.MediaSources[1].Container != "hls" {
+		t.Fatalf("expected 2nd source to be baimao HLS, got %+v", resp.MediaSources[1])
+	}
+	if resp.MediaSources[2].Id != "akari_src_AGE_2" || resp.MediaSources[2].Container != "hls" {
+		t.Fatalf("expected 3rd source to be AGE HLS, got %+v", resp.MediaSources[2])
+	}
+
+	// Verify subtitle streams attached
+	hasSubtitle := false
+	for _, ms := range resp.MediaSources[0].MediaStreams {
+		if ms.Type == "Subtitle" {
+			hasSubtitle = true
+			break
+		}
+	}
+	if !hasSubtitle {
+		t.Fatalf("expected subtitle stream in MediaSources[0]")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -27,7 +28,8 @@ type ResolvedStream struct {
 }
 
 type StreamResolver struct {
-	client *http.Client
+	client      *http.Client
+	probeClient *http.Client
 }
 
 func NewStreamResolver() *StreamResolver {
@@ -57,6 +59,17 @@ func NewStreamResolver() *StreamResolver {
 					}
 				}
 				return nil
+			},
+		},
+		probeClient: &http.Client{
+			Timeout: 3 * time.Second,
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+				DialContext: (&net.Dialer{
+					Timeout: 2 * time.Second,
+				}).DialContext,
+				TLSHandshakeTimeout:   2 * time.Second,
+				ResponseHeaderTimeout: 2500 * time.Millisecond,
 			},
 		},
 	}
@@ -279,15 +292,29 @@ var (
 	directMediaExtRegex  = regexp.MustCompile(`(?i)\.(m3u8|mp4|mkv|flv|webm)(\?.*)?$`)
 )
 
+func isAdOrPosterURL(lower string) bool {
+	return strings.Contains(lower, "adposter") ||
+		strings.Contains(lower, "ad_poster") ||
+		strings.Contains(lower, "advert") ||
+		strings.Contains(lower, "/ad/") ||
+		strings.Contains(lower, "ad.mp4") ||
+		strings.Contains(lower, "adv_") ||
+		strings.Contains(lower, "poster.mp4") ||
+		strings.Contains(lower, "loading.mp4")
+}
+
 func (r *StreamResolver) extractScriptConfigs(html string) (string, bool) {
 	if m := artplayerConfigRegex.FindStringSubmatch(html); len(m) > 1 {
-		return m[1], true
+		if !isAdOrPosterURL(strings.ToLower(m[1])) {
+			return m[1], true
+		}
 	}
 	allMatches := scriptMediaRegex.FindAllStringSubmatch(html, -1)
 	for _, m := range allMatches {
 		if len(m) > 1 {
 			val := m[1]
-			if !strings.Contains(val, "ad.") && !strings.Contains(val, "google") {
+			lower := strings.ToLower(val)
+			if !strings.Contains(lower, "ad.") && !strings.Contains(lower, "google") && !isAdOrPosterURL(lower) {
 				return val, true
 			}
 		}
@@ -297,23 +324,30 @@ func (r *StreamResolver) extractScriptConfigs(html string) (string, bool) {
 
 func (r *StreamResolver) extractVideoTags(html string) (string, bool) {
 	if m := videoTagRegex.FindStringSubmatch(html); len(m) > 1 {
-		return m[1], true
+		if !isAdOrPosterURL(strings.ToLower(m[1])) {
+			return m[1], true
+		}
 	}
 	if m := sourceTagRegex.FindStringSubmatch(html); len(m) > 1 {
-		return m[1], true
+		if !isAdOrPosterURL(strings.ToLower(m[1])) {
+			return m[1], true
+		}
 	}
 	return "", false
 }
 
 func (r *StreamResolver) extractRegexMedia(html string) (string, bool) {
 	reM3U8 := regexp.MustCompile(`https?://[^\s"'<>\\]+?\.m3u8[^\s"'<>\\]*`)
-	if match := reM3U8.FindString(html); match != "" {
+	if match := reM3U8.FindString(html); match != "" && !isAdOrPosterURL(strings.ToLower(match)) {
 		return match, true
 	}
 
 	reMP4 := regexp.MustCompile(`https?://[^\s"'<>\\]+?\.mp4[^\s"'<>\\]*`)
-	if match := reMP4.FindString(html); match != "" {
-		return match, true
+	allMP4 := reMP4.FindAllString(html, -1)
+	for _, mp4 := range allMP4 {
+		if !isAdOrPosterURL(strings.ToLower(mp4)) {
+			return mp4, true
+		}
 	}
 
 	return "", false
@@ -325,7 +359,7 @@ func (r *StreamResolver) extractIframes(html, baseURL string) []string {
 	for _, m := range matches {
 		if len(m) > 1 {
 			src := strings.TrimSpace(m[1])
-			if src != "" && !strings.Contains(src, "about:blank") && !strings.Contains(src, "google") {
+			if src != "" && !strings.Contains(src, "about:blank") && !strings.Contains(src, "google") && !isAdOrPosterURL(strings.ToLower(src)) {
 				list = append(list, engine.NormalizeURL(baseURL, src))
 			}
 		}
@@ -336,7 +370,7 @@ func (r *StreamResolver) extractIframes(html, baseURL string) []string {
 func (r *StreamResolver) sniffSecondHop(ctx context.Context, hopURL, referer, userAgent string) (string, bool) {
 	html, finalURL, isMedia, err := r.fetchHTML(ctx, hopURL, referer, userAgent)
 	if err != nil || isMedia {
-		if isMedia {
+		if isMedia && !isAdOrPosterURL(strings.ToLower(finalURL)) {
 			return finalURL, true
 		}
 		return "", false
@@ -379,6 +413,9 @@ func decodeVideoSourceParam(iframeUrl string) string {
 
 func isDirectMediaURL(u string) bool {
 	lower := strings.ToLower(u)
+	if isAdOrPosterURL(lower) {
+		return false
+	}
 	return strings.Contains(lower, ".m3u8") ||
 		strings.Contains(lower, ".mp4") ||
 		strings.Contains(lower, "/m3u8") ||
@@ -393,11 +430,14 @@ func (r *StreamResolver) VerifyPlayable(ctx context.Context, stream *ResolvedStr
 	if stream == nil || stream.RealURL == "" {
 		return "", false
 	}
-	if r.probeStream(ctx, stream.RealURL, stream.Referer, stream.UserAgent, stream.Format) {
+	if isAdOrPosterURL(strings.ToLower(stream.RealURL)) {
+		return "", false
+	}
+	if r.probeStream(ctx, stream.RealURL, stream.Referer, stream.UserAgent, &stream.Format) {
 		return stream.RealURL, true
 	}
 	if alt := alistProxyURL(stream.RealURL); alt != "" {
-		if r.probeStream(ctx, alt, stream.Referer, stream.UserAgent, stream.Format) {
+		if r.probeStream(ctx, alt, stream.Referer, stream.UserAgent, &stream.Format) {
 			log.Printf("[Resolver] Direct URL refused upstream, AList /p/ proxy works: %s", alt)
 			return alt, true
 		}
@@ -405,8 +445,11 @@ func (r *StreamResolver) VerifyPlayable(ctx context.Context, stream *ResolvedStr
 	return "", false
 }
 
-func (r *StreamResolver) probeStream(ctx context.Context, targetURL, referer, userAgent, format string) bool {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+func (r *StreamResolver) probeStream(ctx context.Context, targetURL, referer, userAgent string, format *string) bool {
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, targetURL, nil)
 	if err != nil {
 		return false
 	}
@@ -419,7 +462,12 @@ func (r *StreamResolver) probeStream(ctx context.Context, targetURL, referer, us
 	}
 	req.Header.Set("Range", "bytes=0-16383")
 
-	resp, err := r.client.Do(req)
+	client := r.probeClient
+	if client == nil {
+		client = r.client
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[Resolver] Stream probe failed (%s): %v", targetURL, err)
 		return false
@@ -432,25 +480,142 @@ func (r *StreamResolver) probeStream(ctx context.Context, targetURL, referer, us
 	}
 
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
-	if strings.Contains(contentType, "text/html") || strings.Contains(contentType, "application/json") {
-		log.Printf("[Resolver] Stream probe rejected (%s): invalid content-type %s", targetURL, contentType)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	if len(body) == 0 {
+		log.Printf("[Resolver] Stream probe rejected (%s): empty response body", targetURL)
 		return false
 	}
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
-	if strings.EqualFold(format, "m3u8") {
-		if !strings.Contains(string(body), "#EXTM3U") {
-			log.Printf("[Resolver] Stream probe rejected (%s): response is not a valid playlist", targetURL)
-			return false
+	detectedFormat, valid := DetectContainerFormat(body, contentType)
+	if !valid {
+		headPreview := string(body)
+		if len(headPreview) > 32 {
+			headPreview = headPreview[:32]
 		}
-	} else {
-		trimmed := strings.TrimSpace(string(body))
-		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "<") {
-			log.Printf("[Resolver] Stream probe rejected (%s): payload is json/html error instead of video", targetURL)
-			return false
-		}
+		log.Printf("[Resolver] Stream probe rejected (%s): invalid container format (content-type=%s, head=%q)", targetURL, contentType, headPreview)
+		return false
+	}
+
+	if format != nil && detectedFormat != "" {
+		*format = detectedFormat
 	}
 	return true
+}
+
+// DetectContainerFormat inspects the initial byte chunk (up to 16KB) and content-type header
+// to determine the genuine container format of the media stream.
+// It strictly rejects fake media, images (.webp/.png/.jpg/.gif), and HTML/JSON error payloads.
+func DetectContainerFormat(data []byte, contentType string) (string, bool) {
+	if len(data) == 0 {
+		return "", false
+	}
+
+	ct := strings.ToLower(contentType)
+	// Immediate negative checks for images and error payloads
+	if strings.Contains(ct, "image/webp") || strings.Contains(ct, "image/jpeg") || strings.Contains(ct, "image/png") || strings.Contains(ct, "image/gif") {
+		return "", false
+	}
+	if strings.Contains(ct, "text/html") || strings.Contains(ct, "application/json") || strings.Contains(ct, "application/xml") {
+		return "", false
+	}
+
+	// 1. Explicitly check and reject known Image binary signatures
+	// WebP: RIFF....WEBP (0x52, 0x49, 0x46, 0x46 ... 0x57, 0x45, 0x42, 0x50)
+	if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
+		return "", false
+	}
+	// JPEG: \xff\xd8\xff
+	if len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff {
+		return "", false
+	}
+	// PNG: \x89PNG\r\n\x1a\n
+	if len(data) >= 8 && data[0] == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G' && data[4] == 0x0d && data[5] == 0x0a && data[6] == 0x1a && data[7] == 0x0a {
+		return "", false
+	}
+	// GIF: GIF87a / GIF89a
+	if len(data) >= 6 && (string(data[:6]) == "GIF87a" || string(data[:6]) == "GIF89a") {
+		return "", false
+	}
+
+	// 2. Reject plain text / HTML / JSON error payloads
+	prefixLen := len(data)
+	if prefixLen > 512 {
+		prefixLen = 512
+	}
+	trimmedStr := strings.TrimSpace(string(data[:prefixLen]))
+	lowerTrimmed := strings.ToLower(trimmedStr)
+	if strings.HasPrefix(lowerTrimmed, "<!doctype") ||
+		strings.HasPrefix(lowerTrimmed, "<html") ||
+		strings.HasPrefix(lowerTrimmed, "<script") ||
+		strings.HasPrefix(lowerTrimmed, "<?xml") ||
+		strings.HasPrefix(lowerTrimmed, "{\"") ||
+		strings.HasPrefix(lowerTrimmed, "{\n") ||
+		strings.HasPrefix(lowerTrimmed, "{\r") ||
+		strings.HasPrefix(lowerTrimmed, "{ ") {
+		return "", false
+	}
+
+	// 3. HLS / M3U8 Playlist
+	dataStr := string(data)
+	if strings.Contains(dataStr, "#EXTM3U") || strings.Contains(dataStr, "#EXT-X-") || strings.Contains(dataStr, "#EXTINF:") {
+		return "m3u8", true
+	}
+
+	// 4. MP4 / ISO Base Media File Format (ISOBMFF)
+	// Standard MP4 box structure: [4 bytes size][4 bytes FourCC]
+	// Common starting box types: ftyp, moov, mdat, free, skip, wide, styp
+	if len(data) >= 8 {
+		fourcc := string(data[4:8])
+		if fourcc == "ftyp" || fourcc == "moov" || fourcc == "mdat" || fourcc == "free" || fourcc == "skip" || fourcc == "wide" || fourcc == "styp" {
+			return "mp4", true
+		}
+	}
+	// Sometimes ftyp box is preceded by a small prefix or within first 128 bytes
+	maxSearch := len(data)
+	if maxSearch > 128 {
+		maxSearch = 128
+	}
+	if idx := strings.Index(string(data[:maxSearch]), "ftyp"); idx >= 4 {
+		return "mp4", true
+	}
+
+	// 5. MPEG-TS (Transport Stream)
+	// Starts with 0x47 ('G'). Valid TS packets repeat 0x47 every 188 (or 192/204) bytes.
+	if data[0] == 0x47 {
+		if len(data) >= 188*2 {
+			if data[188] == 0x47 || data[192] == 0x47 || data[204] == 0x47 {
+				return "ts", true
+			}
+		} else {
+			return "ts", true
+		}
+	} else if len(data) >= 196 && data[4] == 0x47 && data[196] == 0x47 { // 192-byte BDAV TS
+		return "ts", true
+	}
+
+	// 6. Matroska / WebM
+	// Starts with EBML ID: 0x1A, 0x45, 0xDF, 0xA3
+	if len(data) >= 4 && data[0] == 0x1a && data[1] == 0x45 && data[2] == 0xdf && data[3] == 0xa3 {
+		return "mkv", true
+	}
+
+	// 7. FLV
+	// Starts with 'FLV\x01'
+	if len(data) >= 4 && data[0] == 'F' && data[1] == 'L' && data[2] == 'V' && data[3] == 0x01 {
+		return "flv", true
+	}
+
+	// 8. Ogg
+	if len(data) >= 4 && string(data[:4]) == "OggS" {
+		return "ogg", true
+	}
+
+	// 9. AVI
+	if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "AVI " {
+		return "avi", true
+	}
+
+	return "", false
 }
 
 // ShouldSendReferer checks if the referer header should be sent to the given target URL.

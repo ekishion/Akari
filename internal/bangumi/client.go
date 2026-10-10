@@ -80,22 +80,34 @@ func (s *BangumiSubject) IsMovie() bool {
 	if s == nil {
 		return false
 	}
-	if strings.Contains(s.Platform, "剧场版") || strings.Contains(s.Platform, "电影") {
+	plat := strings.ToLower(s.Platform)
+	// 1. Explicit movie platform
+	if strings.Contains(plat, "剧场版") || strings.Contains(plat, "电影") || strings.Contains(plat, "movie") {
 		return true
 	}
+	// 2. Multi-episode TV / WEB series with > 3 episodes are NEVER single movies
+	if s.TotalEps > 3 || s.Eps > 3 {
+		return false
+	}
+	// 3. TV / WEB series with more than 1 episode are TV series
+	if (plat == "tv" || plat == "web") && (s.TotalEps > 1 || s.Eps > 1) {
+		return false
+	}
+	// 4. Curated MetaTags
 	for _, m := range s.MetaTags {
-		if strings.Contains(m, "剧场版") || strings.Contains(m, "电影") {
+		if strings.Contains(m, "剧场版") || strings.Contains(m, "电影") || strings.Contains(m, "Movie") {
 			return true
 		}
 	}
+	// 5. User Tags (only if total episodes <= 3 and tag count >= 10)
 	for _, t := range s.Tags {
-		if (t.Name == "剧场版" || t.Name == "动画电影" || t.Name == "电影" || t.Name == "电影版") && t.Count >= 2 {
+		if (t.Name == "剧场版" || t.Name == "动画电影" || t.Name == "电影" || t.Name == "电影版") && t.Count >= 10 {
 			return true
 		}
 	}
-	// TotalEps is 1 and name has format keyword
+	// 6. Title keywords (only if total episodes <= 3)
 	name := strings.ToLower(s.Name + " " + s.NameCn)
-	if s.TotalEps == 1 && (strings.Contains(name, "剧场版") || strings.Contains(name, "电影") || strings.Contains(name, "movie")) {
+	if strings.Contains(name, "剧场版") || strings.Contains(name, "动画电影") || strings.Contains(name, "大电影") || strings.Contains(name, "the movie") {
 		return true
 	}
 	return false

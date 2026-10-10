@@ -12,9 +12,11 @@ import {
   Layers,
   RotateCcw,
   Sparkles,
+  Tv,
+  QrCode,
 } from 'lucide-react'
 import { api } from '../api'
-import type { RulePlugin, GlobalSynonym, SubjectAlias } from '../types'
+import type { RulePlugin, GlobalSynonym, SubjectAlias, BilibiliStatus } from '../types'
 import { MdCard } from '../components/md3/MdCard'
 import { MdButton } from '../components/md3/MdButton'
 import { MdTextField } from '../components/md3/MdTextField'
@@ -23,6 +25,7 @@ import { MdDialog } from '../components/md3/MdDialog'
 import { RuleTestModal } from '../components/RuleTestModal'
 import { AddRuleModal } from '../components/AddRuleModal'
 import { EditRuleModal } from '../components/EditRuleModal'
+import { BilibiliQrModal } from '../components/BilibiliQrModal'
 
 interface RulesViewProps {
   rules: RulePlugin[]
@@ -71,6 +74,63 @@ export const RulesView: React.FC<RulesViewProps> = ({ rules, onRefresh }) => {
   const [subTitle, setSubTitle] = useState('')
   const [subAliasesText, setSubAliasesText] = useState('')
   const [aliasSearch, setAliasSearch] = useState('')
+
+  // Bilibili Primary Source state
+  const [biliStatus, setBiliStatus] = useState<BilibiliStatus | null>(null)
+  const [isBiliQrModalOpen, setIsBiliQrModalOpen] = useState(false)
+  const [biliToggling, setBiliToggling] = useState(false)
+
+  const fetchBiliStatus = async () => {
+    try {
+      const st = await api.getBilibiliStatus()
+      setBiliStatus(st)
+    } catch (err) {
+      console.error('Failed to load Bilibili status:', err)
+    }
+  }
+
+  useEffect(() => {
+    fetchBiliStatus()
+  }, [])
+
+  const handleToggleBilibili = async (enabled: boolean) => {
+    setBiliToggling(true)
+    try {
+      await api.updateBilibiliConfig({ enabled })
+      await fetchBiliStatus()
+    } catch (err: any) {
+      alert(err.message || '切换哔哩哔哩源状态失败')
+    } finally {
+      setBiliToggling(false)
+    }
+  }
+
+  const handleToggleBiliPrefer = async (prefer: boolean) => {
+    try {
+      await api.updateBilibiliConfig({ prefer_bilibili: prefer })
+      await fetchBiliStatus()
+    } catch (err: any) {
+      alert(err.message || '修改优先规则失败')
+    }
+  }
+
+  const handleUpdateBiliQuality = async (maxQuality: number) => {
+    try {
+      await api.updateBilibiliConfig({ max_quality: maxQuality })
+      await fetchBiliStatus()
+    } catch (err: any) {
+      alert(err.message || '修改画质限制失败')
+    }
+  }
+
+  const handleUpdateBiliStreamMode = async (mode: string) => {
+    try {
+      await api.updateBilibiliConfig({ stream_mode: mode })
+      await fetchBiliStatus()
+    } catch (err: any) {
+      alert(err.message || '切换流模式失败')
+    }
+  }
 
   const fetchAliasesData = async () => {
     try {
@@ -305,6 +365,115 @@ export const RulesView: React.FC<RulesViewProps> = ({ rules, onRefresh }) => {
                 </MdButton>
               </div>
             </div>
+
+            {/* Bilibili Primary Source Hero Card */}
+            <motion.div variants={itemVariants}>
+              <MdCard
+                variant="filled"
+                className="p-5 sm:p-6 border border-pink-500/30 bg-gradient-to-br from-pink-500/5 via-[var(--md-surface-container)] to-[var(--md-surface-container)] relative overflow-hidden shadow-xs"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[var(--md-outline-variant)]/60">
+                  <div className="flex items-center gap-3.5">
+                    <div className="p-3 rounded-2xl bg-pink-500/10 text-pink-600 dark:text-pink-400 shrink-0">
+                      <Tv className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-base text-[var(--md-on-surface)]">哔哩哔哩 (Bilibili) 官方源</span>
+                        <span className="px-2.5 py-0.5 text-[11px] font-bold bg-pink-500/15 text-pink-600 dark:text-pink-400 rounded-full border border-pink-500/30 flex items-center gap-1">
+                          🌟 第一首要源
+                        </span>
+                        {biliStatus?.is_login && (
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              biliStatus.is_vip
+                                ? 'bg-gradient-to-r from-pink-500 to-rose-500 text-white'
+                                : 'bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/20'
+                            }`}
+                          >
+                            {biliStatus.is_vip ? '大会员 VIP' : '普通登录'}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-[var(--md-on-surface-variant)] mt-1">
+                        优先级最高：播放时优先秒级直连 B 站官方超清流；B 站未收录或无该集时，自动降级请求下方动漫站规则源。
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 self-end sm:self-auto shrink-0">
+                    <MdButton
+                      type="button"
+                      variant="tonal"
+                      size="sm"
+                      onClick={() => setIsBiliQrModalOpen(true)}
+                      icon={<QrCode className="w-4 h-4" />}
+                    >
+                      {biliStatus?.is_login ? '重新扫码' : '扫码授权登录'}
+                    </MdButton>
+                    <MdSwitch
+                      checked={biliStatus?.enabled ?? true}
+                      disabled={biliToggling}
+                      onChange={() => handleToggleBilibili(!(biliStatus?.enabled ?? true))}
+                    />
+                  </div>
+                </div>
+
+                {/* Sub-controls: Priority, Quality & Stream Mode Selector */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-4 text-xs">
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-[var(--md-surface-container-high)]/60 border border-[var(--md-outline-variant)]/40">
+                    <div>
+                      <span className="font-semibold text-[var(--md-on-surface)]">优先匹配返回</span>
+                      <p className="text-[11px] text-[var(--md-on-surface-variant)]">命中后直接秒级直出</p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={biliStatus?.prefer ?? true}
+                      onChange={(e) => handleToggleBiliPrefer(e.target.checked)}
+                      className="w-4 h-4 rounded accent-[var(--md-primary)] cursor-pointer"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-[var(--md-surface-container-high)]/60 border border-[var(--md-outline-variant)]/40">
+                    <div>
+                      <span className="font-semibold text-[var(--md-on-surface)]">最高画质上限</span>
+                      <p className="text-[11px] text-[var(--md-on-surface-variant)]">
+                        最高可用: <strong className="text-[var(--md-primary)]">{biliStatus?.quality_desc || '480P 清晰'}</strong>
+                      </p>
+                    </div>
+                    <select
+                      value={biliStatus?.max_quality || 120}
+                      onChange={(e) => handleUpdateBiliQuality(Number(e.target.value))}
+                      className="px-3 py-1.5 rounded-lg bg-[var(--md-surface-container)] text-[var(--md-on-surface)] text-xs border border-[var(--md-outline-variant)] focus:border-[var(--md-primary)] focus:outline-hidden cursor-pointer"
+                    >
+                      <option value={120}>4K 超清 / 杜比 (最高)</option>
+                      <option value={116}>1080P 60帧 (大会员)</option>
+                      <option value={112}>1080P 高码率 (大会员)</option>
+                      <option value={80}>1080P 高清 (需登录)</option>
+                      <option value={64}>720P 高清</option>
+                      <option value={32}>480P 清晰 (免登)</option>
+                    </select>
+                  </div>
+
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-[var(--md-surface-container-high)]/60 border border-[var(--md-outline-variant)]/40">
+                    <div>
+                      <span className="font-semibold text-[var(--md-on-surface)]">串流传输模式</span>
+                      <p className="text-[11px] text-[var(--md-on-surface-variant)]">
+                        {biliStatus?.stream_mode === 'dash' ? 'DASH多路混流 (需ffmpeg)' : 'MP4单流直链 (免ffmpeg)'}
+                      </p>
+                    </div>
+                    <select
+                      value={biliStatus?.stream_mode || 'direct'}
+                      onChange={(e) => handleUpdateBiliStreamMode(e.target.value)}
+                      className="px-3 py-1.5 rounded-lg bg-[var(--md-surface-container)] text-[var(--md-on-surface)] text-xs border border-[var(--md-outline-variant)] focus:border-[var(--md-primary)] focus:outline-hidden cursor-pointer"
+                    >
+                      <option value="direct">🚀 MP4 单流直链 (免 ffmpeg / 极速稳定)</option>
+                      <option value="dash">🎬 DASH 混流模式 (需 ffmpeg / 支持4K)</option>
+                    </select>
+                  </div>
+                </div>
+              </MdCard>
+            </motion.div>
 
             {/* Rules Cards Grid */}
             <motion.div variants={containerVariants} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -655,6 +824,15 @@ export const RulesView: React.FC<RulesViewProps> = ({ rules, onRefresh }) => {
         rule={selectedRuleForTest}
         isOpen={!!selectedRuleForTest}
         onClose={() => setSelectedRuleForTest(null)}
+      />
+
+      <BilibiliQrModal
+        isOpen={isBiliQrModalOpen}
+        onClose={() => setIsBiliQrModalOpen(false)}
+        onSuccess={() => {
+          fetchBiliStatus()
+          onRefresh()
+        }}
       />
     </div>
   )

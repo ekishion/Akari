@@ -157,5 +157,53 @@ export interface TelemetryEvent {
   recentLog?: string
 }
 
+export interface BilibiliStatus {
+  is_login: boolean
+  mid: number
+  uname: string
+  face: string
+  is_vip: boolean
+  vip_due_date: number
+  max_quality: number
+  quality_desc: string
+  stream_mode?: string
+  enabled: boolean
+  prefer: boolean
+}
+
+export interface BilibiliConfigPayload {
+  sessdata?: string
+  bili_jct?: string
+  buvid3?: string
+  dede_user_id?: string
+  enabled?: boolean
+  prefer_bilibili?: boolean
+  max_quality?: number
+  stream_mode?: string
+}
+
+export interface BilibiliQRGenerateResponse {
+  code: number
+  message: string
+  data: {
+    url: string
+    qrcode_key: string
+  }
+}
+
+export interface BilibiliQRPollResponse {
+  poll: {
+    code: number
+    message: string
+    data: {
+      url: string
+      refresh_token: string
+      code: number
+      message: string
+    }
+  }
+  is_success: boolean
+}
+
 
 

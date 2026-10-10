@@ -53,7 +53,13 @@ func NewStreamProxy(cfg *config.Config, db *storage.DB) *StreamProxy {
 		secretKey: secretKey,
 		client: &http.Client{
 			Transport: &http.Transport{
-				Proxy: http.ProxyFromEnvironment,
+				Proxy: func(req *http.Request) (*url.URL, error) {
+					host := strings.ToLower(req.URL.Hostname())
+					if strings.HasSuffix(host, ".bilivideo.com") || strings.HasSuffix(host, ".biliapi.net") || strings.HasSuffix(host, ".hdslb.com") || host == "bilivideo.com" || host == "biliapi.net" || host == "bilibili.com" {
+						return nil, nil // Direct bypass proxy
+					}
+					return http.ProxyFromEnvironment(req)
+				},
 				TLSClientConfig: &tls.Config{
 					InsecureSkipVerify: true,
 				},
@@ -212,8 +218,12 @@ func (p *StreamProxy) HandleSegment(c *gin.Context) {
 
 	referer := c.Query("referer")
 	ua := c.Query("ua")
+	cookie := c.Query("cookie")
 	if ua == "" {
 		ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+	}
+	if referer == "" && (strings.Contains(u.Hostname(), "bilivideo.com") || strings.Contains(u.Hostname(), "biliapi.net")) {
+		referer = "https://www.bilibili.com/"
 	}
 
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, rawTarget, nil)
@@ -225,6 +235,9 @@ func (p *StreamProxy) HandleSegment(c *gin.Context) {
 	req.Header.Set("User-Agent", ua)
 	if referer != "" && resolver.ShouldSendReferer(rawTarget, referer) {
 		req.Header.Set("Referer", referer)
+	}
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
 	}
 
 	// Pass Range header for seek support

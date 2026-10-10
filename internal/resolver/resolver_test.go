@@ -98,7 +98,7 @@ func TestStreamResolver_VerifyPlayable(t *testing.T) {
 		switch req.URL.Path {
 		case "/video.mp4":
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("fake-mp4-data"))
+			w.Write([]byte("\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isomfake-video-payload"))
 		case "/dead.mp4":
 			w.WriteHeader(http.StatusBadRequest)
 			w.Write([]byte("Bad Request\n"))
@@ -107,13 +107,19 @@ func TestStreamResolver_VerifyPlayable(t *testing.T) {
 			w.Write([]byte("Bad Request\n"))
 		case "/p/blocked.mp4":
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("proxy-mp4-data"))
+			w.Write([]byte("\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isommp42"))
 		case "/playlist.m3u8":
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:10.0,\nseg1.ts\n"))
 		case "/fake.m3u8":
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("<html>Error Page</html>"))
+		case "/fake.webp":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("RIFF\x20\x00\x00\x00WEBPVP8 ...fake-image-bytes..."))
+		case "/fake.png":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR..."))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -168,5 +174,25 @@ func TestStreamResolver_VerifyPlayable(t *testing.T) {
 	_, okFake := r.VerifyPlayable(ctx, streamFakeM3U8)
 	if okFake {
 		t.Fatalf("expected fake m3u8 without #EXTM3U to fail verification")
+	}
+
+	// 6. Fake WebP masquerading as video
+	streamFakeWebP := &ResolvedStream{
+		RealURL: ts.URL + "/fake.webp",
+		Format:  "mp4",
+	}
+	_, okFakeWebP := r.VerifyPlayable(ctx, streamFakeWebP)
+	if okFakeWebP {
+		t.Fatalf("expected fake webp to fail container verification")
+	}
+
+	// 7. Fake PNG masquerading as video
+	streamFakePNG := &ResolvedStream{
+		RealURL: ts.URL + "/fake.png",
+		Format:  "mp4",
+	}
+	_, okFakePNG := r.VerifyPlayable(ctx, streamFakePNG)
+	if okFakePNG {
+		t.Fatalf("expected fake png to fail container verification")
 	}
 }

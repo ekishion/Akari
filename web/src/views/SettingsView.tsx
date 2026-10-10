@@ -9,13 +9,18 @@ import {
   Activity,
   Save,
   Key,
+  Tv,
+  QrCode,
+  LogOut,
+  RefreshCw,
 } from 'lucide-react'
 import { api } from '../api'
-import type { SystemConfig, SystemStatus, MirrorTestResult } from '../types'
+import type { SystemConfig, SystemStatus, MirrorTestResult, BilibiliStatus } from '../types'
 import { MdCard } from '../components/md3/MdCard'
 import { MdButton } from '../components/md3/MdButton'
 import { MdTextField } from '../components/md3/MdTextField'
 import { MdChip } from '../components/md3/MdChip'
+import { BilibiliQrModal } from '../components/BilibiliQrModal'
 
 const containerVariants: Variants = {
   hidden: { opacity: 0 },
@@ -74,6 +79,86 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ config, onRefresh })
 
   const [testingBgm, setTestingBgm] = useState(false)
   const [bgmTestResult, setBgmTestResult] = useState<MirrorTestResult | null>(null)
+
+  // Bilibili States
+  const [biliStatus, setBiliStatus] = useState<BilibiliStatus | null>(null)
+  const [biliLoading, setBiliLoading] = useState(false)
+  const [biliSaveLoading, setBiliSaveLoading] = useState(false)
+  const [biliSessdata, setBiliSessdata] = useState('')
+  const [biliBuvid3, setBiliBuvid3] = useState('')
+  const [biliEnabled, setBiliEnabled] = useState(true)
+  const [biliPrefer, setBiliPrefer] = useState(true)
+  const [biliMaxQuality, setBiliMaxQuality] = useState(120)
+  const [biliSuccess, setBiliSuccess] = useState<string | null>(null)
+  const [biliError, setBiliError] = useState<string | null>(null)
+  const [isQrModalOpen, setIsQrModalOpen] = useState(false)
+
+  const fetchBilibiliStatus = async () => {
+    setBiliLoading(true)
+    try {
+      const st = await api.getBilibiliStatus()
+      setBiliStatus(st)
+      if (st) {
+        setBiliEnabled(st.enabled)
+        setBiliPrefer(st.prefer)
+        if (st.max_quality) setBiliMaxQuality(st.max_quality)
+      }
+    } catch (err) {
+      console.error('Failed to load bilibili status:', err)
+    } finally {
+      setBiliLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchBilibiliStatus()
+  }, [])
+
+  const handleSaveBilibiliConfig = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setBiliSaveLoading(true)
+    setBiliSuccess(null)
+    setBiliError(null)
+
+    try {
+      const payload: any = {
+        enabled: biliEnabled,
+        prefer_bilibili: biliPrefer,
+        max_quality: biliMaxQuality,
+      }
+      if (biliSessdata.trim()) {
+        payload.sessdata = biliSessdata.trim()
+      }
+      if (biliBuvid3.trim()) {
+        payload.buvid3 = biliBuvid3.trim()
+      }
+
+      const res = await api.updateBilibiliConfig(payload)
+      if (res && res.status) {
+        setBiliStatus(res.status)
+        setBiliSessdata('')
+        setBiliBuvid3('')
+        setBiliSuccess('哔哩哔哩配置已成功保存并同步！')
+        setTimeout(() => setBiliSuccess(null), 3000)
+      }
+    } catch (err: any) {
+      setBiliError(err.message || '保存哔哩哔哩配置失败')
+    } finally {
+      setBiliSaveLoading(false)
+    }
+  }
+
+  const handleLogoutBilibili = async () => {
+    if (!confirm('确定要解绑当前哔哩哔哩账号并清除凭据吗？')) return
+    try {
+      await api.logoutBilibili()
+      setBiliSuccess('已成功退出哔哩哔哩登录')
+      fetchBilibiliStatus()
+      setTimeout(() => setBiliSuccess(null), 3000)
+    } catch (err: any) {
+      setBiliError(err.message || '退出登录失败')
+    }
+  }
 
   // Password update states
   const [oldPassword, setOldPassword] = useState('')
@@ -332,7 +417,195 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ config, onRefresh })
       </MdCard>
       </motion.div>
 
-      {/* 2. Admin Password Change */}
+      {/* 2. Bilibili Integration & Authentication */}
+      <motion.div variants={itemVariants}>
+        <MdCard variant="filled" className="p-6 sm:p-8">
+          <div className="flex items-center justify-between gap-3 mb-6 pb-4 border-b border-[var(--md-outline-variant)]/60">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-2xl bg-pink-500/10 text-pink-600 dark:text-pink-400">
+                <Tv className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-[var(--md-on-surface)]">哔哩哔哩 (Bilibili) 接入与画质</h3>
+                <p className="text-xs text-[var(--md-on-surface-variant)]">
+                  毫秒级官方 API 直连解析与实时 DASH 流式合流，支持 4K/1080P60 大会员高码率
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <MdButton
+                type="button"
+                variant="tonal"
+                size="sm"
+                onClick={() => setIsQrModalOpen(true)}
+                icon={<QrCode className="w-4 h-4" />}
+              >
+                扫码授权登录
+              </MdButton>
+            </div>
+          </div>
+
+          {/* Account Status Card */}
+          <div className="p-4 rounded-2xl bg-[var(--md-surface-container)]/70 border border-[var(--md-outline-variant)]/50 mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              {biliStatus?.is_login && biliStatus.face ? (
+                <img
+                  src={biliStatus.face}
+                  alt={biliStatus.uname}
+                  referrerPolicy="no-referrer"
+                  crossOrigin="anonymous"
+                  onError={(e) => {
+                    const target = e.currentTarget
+                    if (!target.dataset.retried && biliStatus?.face) {
+                      target.dataset.retried = 'true'
+                      target.src = `/items/images/proxy?url=${encodeURIComponent(biliStatus.face)}`
+                    }
+                  }}
+                  className="w-12 h-12 rounded-full border-2 border-pink-500/30 object-cover shadow-xs"
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500">
+                  <Tv className="w-6 h-6" />
+                </div>
+              )}
+
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-sm text-[var(--md-on-surface)]">
+                    {biliStatus?.is_login ? biliStatus.uname : '未登录 (公开免登模式)'}
+                  </span>
+                  {biliStatus?.is_login && (
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        biliStatus.is_vip
+                          ? 'bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-xs'
+                          : 'bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/20'
+                      }`}
+                    >
+                      {biliStatus.is_vip ? '大会员 VIP' : '普通用户'}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-[var(--md-on-surface-variant)] mt-0.5">
+                  当前支持画质: <span className="font-semibold text-[var(--md-primary)]">{biliStatus?.quality_desc || '480P 清晰'}</span>
+                  {biliStatus?.is_login && ` · UID: ${biliStatus.mid}`}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-end sm:self-auto">
+              <MdButton
+                type="button"
+                variant="outlined"
+                size="sm"
+                loading={biliLoading}
+                onClick={fetchBilibiliStatus}
+                icon={<RefreshCw className="w-3.5 h-3.5" />}
+              >
+                刷新状态
+              </MdButton>
+              {biliStatus?.is_login && (
+                <MdButton
+                  type="button"
+                  variant="text"
+                  size="sm"
+                  onClick={handleLogoutBilibili}
+                  icon={<LogOut className="w-3.5 h-3.5 text-rose-500" />}
+                >
+                  退出账号
+                </MdButton>
+              )}
+            </div>
+          </div>
+
+          {/* Configuration Form */}
+          <form onSubmit={handleSaveBilibiliConfig} className="flex flex-col gap-5">
+            {/* Toggles & Options */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-2xl bg-[var(--md-surface-container-high)]/40 border border-[var(--md-outline-variant)]/40">
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <span className="text-sm font-semibold text-[var(--md-on-surface)]">启用哔哩哔哩官方源</span>
+                  <p className="text-xs text-[var(--md-on-surface-variant)]">允许解析并播放 B 站正版番剧与高清流</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={biliEnabled}
+                  onChange={(e) => setBiliEnabled(e.target.checked)}
+                  className="w-5 h-5 rounded-md accent-[var(--md-primary)] cursor-pointer"
+                />
+              </label>
+
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <span className="text-sm font-semibold text-[var(--md-on-surface)]">优先推荐 B 站片源</span>
+                  <p className="text-xs text-[var(--md-on-surface-variant)]">匹配命中时置于播放源首位提供高画质</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={biliPrefer}
+                  onChange={(e) => setBiliPrefer(e.target.checked)}
+                  className="w-5 h-5 rounded-md accent-[var(--md-primary)] cursor-pointer"
+                />
+              </label>
+            </div>
+
+            {/* Quality & Manual Input */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label className="block text-xs font-semibold text-[var(--md-on-surface)] mb-2">
+                  最大解析画质限制
+                </label>
+                <select
+                  value={biliMaxQuality}
+                  onChange={(e) => setBiliMaxQuality(Number(e.target.value))}
+                  className="w-full px-4 py-3 rounded-2xl bg-[var(--md-surface-container)] text-[var(--md-on-surface)] text-sm border border-[var(--md-outline-variant)] focus:border-[var(--md-primary)] focus:outline-hidden transition-colors"
+                >
+                  <option value={120}>4K 超清 / 杜比视界 (需大会员)</option>
+                  <option value={116}>1080P 60帧 (需大会员)</option>
+                  <option value={80}>1080P 高清 (需普通登录)</option>
+                  <option value={64}>720P 高清</option>
+                  <option value={32}>480P 清晰 (免登录)</option>
+                </select>
+              </div>
+
+              <MdTextField
+                label="手动设置 SESSDATA (可选)"
+                placeholder="留空则保持当前或使用扫码登录"
+                type="password"
+                value={biliSessdata}
+                onChange={(e) => setBiliSessdata(e.target.value)}
+                helperText="填入后将覆盖当前 Cookie"
+              />
+            </div>
+
+            {biliSuccess && (
+              <div className="p-3.5 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-semibold border border-emerald-500/20">
+                {biliSuccess}
+              </div>
+            )}
+            {biliError && (
+              <div className="p-3.5 rounded-2xl bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-semibold border border-rose-500/20">
+                {biliError}
+              </div>
+            )}
+
+            <div className="flex justify-end pt-2">
+              <MdButton
+                type="submit"
+                variant="filled"
+                size="md"
+                loading={biliSaveLoading}
+                icon={<Save className="w-4 h-4" />}
+              >
+                保存哔哩哔哩设置
+              </MdButton>
+            </div>
+          </form>
+        </MdCard>
+      </motion.div>
+
+      {/* 3. Admin Password Change */}
       <motion.div variants={itemVariants}>
         <MdCard variant="filled" className="p-6 sm:p-8">
           <div className="flex items-center gap-3 mb-6 pb-4 border-b border-[var(--md-outline-variant)]/60">
@@ -436,6 +709,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ config, onRefresh })
           )}
         </MdCard>
       </motion.div>
+
+      {/* Bilibili QR Login Modal */}
+      <BilibiliQrModal
+        isOpen={isQrModalOpen}
+        onClose={() => setIsQrModalOpen(false)}
+        onSuccess={fetchBilibiliStatus}
+      />
     </motion.div>
   )
 }

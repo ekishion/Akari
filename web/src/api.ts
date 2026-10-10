@@ -13,6 +13,10 @@ import type {
   AuditLog,
   IPBan,
   TelemetryEvent,
+  BilibiliStatus,
+  BilibiliConfigPayload,
+  BilibiliQRGenerateResponse,
+  BilibiliQRPollResponse,
 } from './types'
 
 const BASE_URL = ''
@@ -211,4 +215,23 @@ export const api = {
     }),
   deleteSubjectAliases: (subjectId: number) =>
     request<{ success: boolean }>(`/api/aliases/subjects/${subjectId}`, { method: 'DELETE' }),
+
+  // Bilibili
+  getBilibiliStatus: () => request<BilibiliStatus>('/api/bilibili/status'),
+  updateBilibiliConfig: (data: BilibiliConfigPayload) =>
+    request<{ success: boolean; status: BilibiliStatus }>('/api/bilibili/config', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  generateBilibiliQR: () =>
+    request<BilibiliQRGenerateResponse>('/api/bilibili/qr/generate', {
+      method: 'POST',
+    }),
+  pollBilibiliQR: (qrcodeKey: string) =>
+    request<BilibiliQRPollResponse>(`/api/bilibili/qr/poll?qrcode_key=${encodeURIComponent(qrcodeKey)}`),
+  logoutBilibili: () =>
+    request<{ success: boolean }>('/api/bilibili/logout', {
+      method: 'POST',
+    }),
 }
+

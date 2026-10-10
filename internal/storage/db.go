@@ -79,12 +79,14 @@ func OpenDB(cfg *config.Config) (*DB, error) {
 
 	// Initialize or load master encryption key (256-bit AES) for credentials at rest
 	encKey := make([]byte, 32)
+	hasLoadedKey := false
 	if secretHex, err := s.GetSetting("master_token_key"); err == nil && secretHex != "" {
 		if b, err := hex.DecodeString(secretHex); err == nil && len(b) == 32 {
 			encKey = b
+			hasLoadedKey = true
 		}
 	}
-	if encKey[0] == 0 && encKey[31] == 0 {
+	if !hasLoadedKey {
 		_, _ = rand.Read(encKey)
 		_ = s.SaveSetting("master_token_key", hex.EncodeToString(encKey))
 	}
@@ -1351,5 +1353,126 @@ func (s *DB) UnbanIP(ip string) error {
 	_, err := s.db.Exec(`DELETE FROM ip_bans WHERE ip = ?`, ip)
 	return err
 }
+
+// -------------------------------------------------------------
+// Bilibili Credentials & Settings
+// -------------------------------------------------------------
+
+type StoredBilibiliCredentials struct {
+	SessData   string `json:"sessdata"`
+	BiliJct    string `json:"bili_jct"`
+	Buvid3     string `json:"buvid3"`
+	DedeUserID string `json:"dede_user_id"`
+}
+
+type StoredBilibiliSettings struct {
+	Enabled        bool   `json:"enabled"`
+	PreferBilibili bool   `json:"prefer_bilibili"`
+	MaxQuality     int    `json:"max_quality"`
+	StreamMode     string `json:"stream_mode"`
+}
+
+func (s *DB) GetBilibiliCredentials() (*StoredBilibiliCredentials, error) {
+	sessDataEnc, _ := s.GetSetting("bilibili_sessdata")
+	biliJctEnc, _ := s.GetSetting("bilibili_bili_jct")
+	buvid3Enc, _ := s.GetSetting("bilibili_buvid3")
+	dedeUserIdEnc, _ := s.GetSetting("bilibili_dede_user_id")
+
+	sessData := s.DecryptSecret(sessDataEnc)
+	biliJct := s.DecryptSecret(biliJctEnc)
+	buvid3 := s.DecryptSecret(buvid3Enc)
+	dedeUserId := s.DecryptSecret(dedeUserIdEnc)
+
+	if sessData == "" && buvid3 == "" {
+		return nil, nil
+	}
+
+	return &StoredBilibiliCredentials{
+		SessData:   sessData,
+		BiliJct:    biliJct,
+		Buvid3:     buvid3,
+		DedeUserID: dedeUserId,
+	}, nil
+}
+
+func (s *DB) SaveBilibiliCredentials(sessData, biliJct, buvid3, dedeUserId string) error {
+	sessDataEnc := s.EncryptSecret(strings.TrimSpace(sessData))
+	biliJctEnc := s.EncryptSecret(strings.TrimSpace(biliJct))
+	buvid3Enc := s.EncryptSecret(strings.TrimSpace(buvid3))
+	dedeUserIdEnc := s.EncryptSecret(strings.TrimSpace(dedeUserId))
+
+	if err := s.SaveSetting("bilibili_sessdata", sessDataEnc); err != nil {
+		return err
+	}
+	if err := s.SaveSetting("bilibili_bili_jct", biliJctEnc); err != nil {
+		return err
+	}
+	if err := s.SaveSetting("bilibili_buvid3", buvid3Enc); err != nil {
+		return err
+	}
+	return s.SaveSetting("bilibili_dede_user_id", dedeUserIdEnc)
+}
+
+func (s *DB) GetBilibiliSettings() (*StoredBilibiliSettings, error) {
+	enStr, _ := s.GetSetting("bilibili_enabled")
+	prefStr, _ := s.GetSetting("bilibili_prefer")
+	maxQnStr, _ := s.GetSetting("bilibili_max_quality")
+	streamMode, _ := s.GetSetting("bilibili_stream_mode")
+
+	enabled := true
+	if enStr == "false" || enStr == "0" {
+		enabled = false
+	}
+
+	prefer := true
+	if prefStr == "false" || prefStr == "0" {
+		prefer = false
+	}
+
+	maxQuality := 120 // 4K / 1080P+ highest quality default
+	if q, err := strconv.Atoi(maxQnStr); err == nil && q > 0 {
+		maxQuality = q
+	}
+
+	if streamMode == "" {
+		streamMode = "direct"
+	}
+
+	return &StoredBilibiliSettings{
+		Enabled:        enabled,
+		PreferBilibili: prefer,
+		MaxQuality:     maxQuality,
+		StreamMode:     streamMode,
+	}, nil
+}
+
+func (s *DB) SaveBilibiliSettings(enabled, prefer bool, maxQuality int, streamMode string) error {
+	enStr := "true"
+	if !enabled {
+		enStr = "false"
+	}
+	prefStr := "true"
+	if !prefer {
+		prefStr = "false"
+	}
+	if maxQuality <= 0 {
+		maxQuality = 120
+	}
+	if streamMode == "" {
+		streamMode = "direct"
+	}
+
+	if err := s.SaveSetting("bilibili_enabled", enStr); err != nil {
+		return err
+	}
+	if err := s.SaveSetting("bilibili_prefer", prefStr); err != nil {
+		return err
+	}
+	if err := s.SaveSetting("bilibili_stream_mode", streamMode); err != nil {
+		return err
+	}
+	return s.SaveSetting("bilibili_max_quality", strconv.Itoa(maxQuality))
+}
+
 
 

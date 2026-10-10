@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"akari-bridge/internal/auth"
 	"akari-bridge/internal/bangumi"
+	"akari-bridge/internal/bilibili"
 	"akari-bridge/internal/config"
 	"akari-bridge/internal/danmaku"
 	"akari-bridge/internal/engine"
@@ -37,8 +38,52 @@ func SetupRouter(
 	r.Use(gin.Recovery())
 	r.Use(gin.Logger())
 
+	// Initialize Bilibili Subsystem
+	biliClient := bilibili.NewClient(nil)
+	var initialCreds *bilibili.BilibiliCredentials
+	var initialSettings *bilibili.BilibiliSettings
+	if db != nil {
+		if c, err := db.GetBilibiliCredentials(); err == nil && c != nil {
+			initialCreds = &bilibili.BilibiliCredentials{
+				SessData:   c.SessData,
+				BiliJct:    c.BiliJct,
+				Buvid3:     c.Buvid3,
+				DedeUserID: c.DedeUserID,
+			}
+		}
+		if s, err := db.GetBilibiliSettings(); err == nil && s != nil {
+			initialSettings = &bilibili.BilibiliSettings{
+				Enabled:        s.Enabled,
+				PreferBilibili: s.PreferBilibili,
+				MaxQuality:     s.MaxQuality,
+				StreamMode:     s.StreamMode,
+			}
+		}
+	}
+	saveCredsFunc := func(creds *bilibili.BilibiliCredentials) error {
+		if db == nil {
+			return nil
+		}
+		if creds == nil {
+			return db.SaveBilibiliCredentials("", "", "", "")
+		}
+		return db.SaveBilibiliCredentials(creds.SessData, creds.BiliJct, creds.Buvid3, creds.DedeUserID)
+	}
+	saveSettingsFunc := func(st *bilibili.BilibiliSettings) error {
+		if db == nil || st == nil {
+			return nil
+		}
+		return db.SaveBilibiliSettings(st.Enabled, st.PreferBilibili, st.MaxQuality, st.StreamMode)
+	}
+
+	biliAuth := bilibili.NewAuthManager(biliClient, initialCreds, initialSettings, saveCredsFunc, saveSettingsFunc)
+	biliResolver := bilibili.NewResolver(biliClient)
+	dashMuxer := bilibili.NewDASHMuxer()
+
 	playbackHandler := NewPlaybackHandler(cfg, bgmClient, ruleMgr, eng, res, danmakuClient, db)
-	adminHandler := NewAdminHandler(cfg, authSvc, ruleMgr, eng, bgmClient, playbackHandler, db)
+	playbackHandler.SetBilibili(biliAuth, biliResolver, dashMuxer)
+
+	adminHandler := NewAdminHandler(cfg, authSvc, ruleMgr, eng, bgmClient, playbackHandler, db, biliAuth)
 	adminSecHandler := NewAdminSecurityHandler(cfg, db, adminAuth, authSvc, ruleMgr, playbackHandler)
 	sysHandler := NewSystemHandler(cfg)
 	usersHandler := NewUsersHandler(authSvc, db)
@@ -59,6 +104,8 @@ func SetupRouter(
 	r.HEAD("/stream/m3u8", streamProxy.HandleM3U8)
 	r.GET("/stream/segment", streamProxy.HandleSegment)
 	r.HEAD("/stream/segment", streamProxy.HandleSegment)
+	r.GET("/stream/bilibili/mux", playbackHandler.HandleBilibiliMux)
+	r.HEAD("/stream/bilibili/mux", playbackHandler.HandleBilibiliMux)
 
 	// 2. Admin Web APIs (/api/...)
 	apiGroup := r.Group("/api")
@@ -89,6 +136,13 @@ func SetupRouter(
 			protected.PUT("/system/config", adminHandler.UpdateConfig)
 			protected.POST("/system/clean-cache", adminHandler.CleanCache)
 			protected.POST("/system/bangumi/test", adminHandler.TestBangumiEndpoint)
+
+			// Bilibili
+			protected.GET("/bilibili/status", adminHandler.GetBilibiliStatus)
+			protected.POST("/bilibili/config", adminHandler.UpdateBilibiliConfig)
+			protected.POST("/bilibili/qr/generate", adminHandler.GenerateBilibiliQR)
+			protected.GET("/bilibili/qr/poll", adminHandler.PollBilibiliQR)
+			protected.POST("/bilibili/logout", adminHandler.LogoutBilibili)
 
 			// Users
 			protected.GET("/users", adminHandler.ListUsers)
