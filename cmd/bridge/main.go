@@ -12,14 +12,20 @@ import (
 
 	"akari-bridge/internal/auth"
 	"akari-bridge/internal/bangumi"
+	"akari-bridge/internal/bilibili"
 	"akari-bridge/internal/config"
+	adminctrl "akari-bridge/internal/controller/admin"
+	embyctrl "akari-bridge/internal/controller/emby"
+	streamctrl "akari-bridge/internal/controller/stream"
 	"akari-bridge/internal/danmaku"
 	"akari-bridge/internal/discovery"
-	"akari-bridge/internal/embyapi"
 	"akari-bridge/internal/engine"
 	"akari-bridge/internal/proxy"
+	"akari-bridge/internal/repository"
 	"akari-bridge/internal/resolver"
+	"akari-bridge/internal/router"
 	"akari-bridge/internal/rules"
+	"akari-bridge/internal/service"
 	"akari-bridge/internal/storage"
 )
 
@@ -28,7 +34,7 @@ func main() {
 	log.Println("           Starting Akari Media (Emby Bridge)     ")
 	log.Println("==================================================")
 
-	// 1. Load config
+	// 1. Configuration Bootstrap
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Fatalf("[Error] Failed to load config: %v", err)
@@ -47,35 +53,117 @@ func main() {
 	}
 	defer udpServer.Stop()
 
-	// 3. Initialize Storage & Database
-	db, err := storage.OpenDB(cfg)
+	// 3. Database & Granular Repositories (Data Persistence Layer)
+	legacyDB, err := storage.OpenDB(cfg)
 	if err != nil {
 		log.Fatalf("[Error] Failed to initialize SQLite database: %v", err)
 	}
-	defer db.Close()
+	defer legacyDB.Close()
 
-	// 4. Initialize Services
-	authSvc := auth.NewAuthService(cfg, db)
-	adminAuth := auth.NewAdminAuthService(cfg, db)
+	repoConn, err := repository.OpenDB(cfg)
+	if err != nil {
+		log.Fatalf("[Error] Failed to initialize SQLite repository pool: %v", err)
+	}
+	defer repoConn.Close()
+
+	userRepo := repository.NewUserRepository(repoConn)
+	playbackRepo := repository.NewPlaybackRepository(repoConn)
+	favRepo := repository.NewFavoriteRepository(repoConn)
+	settingRepo := repository.NewSettingRepository(repoConn)
+	ruleRepo := repository.NewRuleRepository(repoConn)
+	synonymRepo := repository.NewSynonymRepository(repoConn)
+	activityRepo := repository.NewActivityRepository(repoConn)
+
+	// 4. Infrastructure & Domain Clients
 	bgmClient := bangumi.NewClient(cfg.BangumiHost)
 	danmakuClient := danmaku.NewClient(cfg.DanDanHost)
 	ruleMgr := rules.NewRuleManager(cfg)
 	eng := engine.NewEngine()
 	res := resolver.NewStreamResolver()
-	streamProxy := proxy.NewStreamProxy(cfg, db)
+	streamProxy := proxy.NewStreamProxy(cfg, legacyDB)
+
+	authSvc := auth.NewAuthService(cfg, legacyDB)
+	adminAuth := auth.NewAdminAuthService(cfg, legacyDB)
+
+	// 5. Bilibili Subsystem
+	biliClient := bilibili.NewClient(nil)
+	var initialCreds *bilibili.BilibiliCredentials
+	var initialSettings *bilibili.BilibiliSettings
+	if legacyDB != nil {
+		if c, err := legacyDB.GetBilibiliCredentials(); err == nil && c != nil {
+			initialCreds = &bilibili.BilibiliCredentials{
+				SessData:   c.SessData,
+				BiliJct:    c.BiliJct,
+				Buvid3:     c.Buvid3,
+				DedeUserID: c.DedeUserID,
+			}
+		}
+		if s, err := legacyDB.GetBilibiliSettings(); err == nil && s != nil {
+			initialSettings = &bilibili.BilibiliSettings{
+				Enabled:        s.Enabled,
+				PreferBilibili: s.PreferBilibili,
+				MaxQuality:     s.MaxQuality,
+				StreamMode:     s.StreamMode,
+			}
+		}
+	}
+	saveCredsFunc := func(creds *bilibili.BilibiliCredentials) error {
+		if legacyDB == nil {
+			return nil
+		}
+		if creds == nil {
+			return legacyDB.SaveBilibiliCredentials("", "", "", "")
+		}
+		return legacyDB.SaveBilibiliCredentials(creds.SessData, creds.BiliJct, creds.Buvid3, creds.DedeUserID)
+	}
+	saveSettingsFunc := func(st *bilibili.BilibiliSettings) error {
+		if legacyDB == nil || st == nil {
+			return nil
+		}
+		return legacyDB.SaveBilibiliSettings(st.Enabled, st.PreferBilibili, st.MaxQuality, st.StreamMode)
+	}
+
+	biliAuth := bilibili.NewAuthManager(biliClient, initialCreds, initialSettings, saveCredsFunc, saveSettingsFunc)
+	biliResolver := bilibili.NewResolver(biliClient)
+	dashMuxer := bilibili.NewDASHMuxer()
+
+	// 6. Business Orchestration (Service Layer)
+	playbackSvc := service.NewPlaybackService(cfg, bgmClient, ruleMgr, eng, res, playbackRepo, synonymRepo, biliAuth, biliResolver, dashMuxer)
+	catalogSvc := service.NewCatalogService(cfg, bgmClient, playbackRepo, favRepo, userRepo)
+	adminSvc := service.NewAdminService(cfg, ruleMgr, eng, activityRepo, userRepo)
 
 	log.Printf("[Init] Loaded %d enabled rule(s)", len(ruleMgr.GetEnabledPlugins()))
 	log.Printf("[Init] DanDanPlay endpoint: %s", cfg.DanDanHost)
-	log.Printf("[Init] SQLite storage initialized in %s", cfg.DataDir)
+	log.Printf("[Init] Clean Architecture repositories initialized in %s", cfg.DataDir)
+	_ = ruleRepo // Referenced for compilation
 
-	// 4. Setup Router
-	router := embyapi.SetupRouter(cfg, authSvc, adminAuth, bgmClient, ruleMgr, eng, res, streamProxy, danmakuClient, db)
+	// 7. Presentation Layer (Controllers)
+	embyItemCtrl := embyctrl.NewItemController(cfg, catalogSvc, bgmClient, authSvc, playbackRepo)
+	embyPbCtrl := embyctrl.NewPlaybackController(cfg, playbackSvc, danmakuClient, bgmClient)
+	embyUserCtrl := embyctrl.NewUserController(authSvc, playbackRepo, favRepo, userRepo, activityRepo)
+	embySysCtrl := embyctrl.NewSystemController(cfg)
 
-	// 5. Start HTTP Server
+	adminAuthCtrl := adminctrl.NewAuthController(adminAuth, authSvc, activityRepo)
+	adminUserCtrl := adminctrl.NewUserController(authSvc, bgmClient, userRepo)
+	adminRuleCtrl := adminctrl.NewRuleController(ruleMgr, eng, adminSvc)
+	adminSysCtrl := adminctrl.NewSystemController(cfg, adminSvc, authSvc, ruleMgr, bgmClient, danmakuClient, settingRepo, playbackRepo, userRepo, synonymRepo, activityRepo)
+	adminBiliCtrl := adminctrl.NewBilibiliController(biliAuth)
+
+	streamProxyCtrl := streamctrl.NewProxyController(streamProxy, dashMuxer, biliAuth)
+
+	// 8. Routers Setup
+	embyRouter := router.NewEmbyRouter(authSvc, embyItemCtrl, embyPbCtrl, embyUserCtrl, embySysCtrl)
+	adminRouter := router.NewAdminRouter(adminAuth, adminAuthCtrl, adminUserCtrl, adminRuleCtrl, adminSysCtrl, adminBiliCtrl)
+	streamRouter := router.NewStreamRouter(streamProxyCtrl)
+	rootRouter := router.NewRouter(cfg, embyRouter, adminRouter, streamRouter, embySysCtrl)
+
+	httpEngine := rootRouter.InitEngine()
+
+	// 9. HTTP Server Lifecyle
 	serverAddr := fmt.Sprintf("0.0.0.0:%d", cfg.HttpPort)
 	srv := &http.Server{
 		Addr:    serverAddr,
-		Handler: router,
+		Handler: httpEngine,
 	}
 
 	go func() {
@@ -85,7 +173,7 @@ func main() {
 		}
 	}()
 
-	// 6. Graceful Shutdown
+	// 10. Graceful Shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
