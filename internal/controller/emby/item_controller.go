@@ -5,7 +5,6 @@ import (
 	"image"
 	"image/color"
 	"image/png"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -392,6 +391,66 @@ func (ctrl *ItemController) GetLiveTvChannels(c *gin.Context) {
 	c.JSON(http.StatusOK, model.NewQueryResult([]model.BaseItemDto{}))
 }
 
+func (ctrl *ItemController) fetchAndServeImage(c *gin.Context, imgUrl string) bool {
+	imgUrl = strings.TrimSpace(imgUrl)
+	if imgUrl == "" {
+		return false
+	}
+	rewritten := imgUrl
+	if ctrl.bangumiClient != nil {
+		rewritten = ctrl.bangumiClient.RewriteImageUrl(imgUrl)
+	}
+
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, rewritten, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("User-Agent", bangumi.BangumiUserAgent)
+	req.Header.Set("Referer", "https://bgm.tv")
+
+	var resp *http.Response
+	if ctrl.bangumiClient != nil {
+		resp, err = ctrl.bangumiClient.DoRequest(req)
+	} else {
+		resp, err = http.DefaultClient.Do(req)
+	}
+
+	if err == nil && resp.StatusCode == http.StatusOK {
+		defer resp.Body.Close()
+		c.Header("Cache-Control", "public, max-age=604800")
+		c.DataFromReader(resp.StatusCode, resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
+		return true
+	}
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+
+	// Fallback to original URL if rewritten failed and was different
+	if rewritten != imgUrl {
+		if reqOrig, errOrig := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, imgUrl, nil); errOrig == nil {
+			reqOrig.Header.Set("User-Agent", bangumi.BangumiUserAgent)
+			reqOrig.Header.Set("Referer", "https://bgm.tv")
+			var respOrig *http.Response
+			if ctrl.bangumiClient != nil {
+				respOrig, err = ctrl.bangumiClient.DoRequest(reqOrig)
+			} else {
+				respOrig, err = http.DefaultClient.Do(reqOrig)
+			}
+			if err == nil && respOrig.StatusCode == http.StatusOK {
+				defer respOrig.Body.Close()
+				c.Header("Cache-Control", "public, max-age=604800")
+				c.DataFromReader(respOrig.StatusCode, respOrig.ContentLength, respOrig.Header.Get("Content-Type"), respOrig.Body, nil)
+				return true
+			}
+			if respOrig != nil {
+				_ = respOrig.Body.Close()
+			}
+		}
+	}
+
+	return false
+}
+
 func (ctrl *ItemController) GetPrimaryImage(c *gin.Context) {
 	id := c.Param("id")
 
@@ -414,17 +473,8 @@ func (ctrl *ItemController) GetPrimaryImage(c *gin.Context) {
 					imgUrl = sub.GetPrimaryImage()
 				}
 			}
-			if imgUrl != "" {
-				if req, err := http.NewRequest(http.MethodGet, imgUrl, nil); err == nil {
-					req.Header.Set("User-Agent", bangumi.BangumiUserAgent)
-					req.Header.Set("Referer", "https://bgm.tv")
-					if resp, err := http.DefaultClient.Do(req); err == nil && resp.StatusCode == http.StatusOK {
-						defer resp.Body.Close()
-						c.Header("Cache-Control", "public, max-age=86400")
-						c.DataFromReader(resp.StatusCode, resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
-						return
-					}
-				}
+			if ctrl.fetchAndServeImage(c, imgUrl) {
+				return
 			}
 		}
 
@@ -450,30 +500,13 @@ func (ctrl *ItemController) GetPrimaryImage(c *gin.Context) {
 		}
 	}
 
-	if imgUrl == "" {
-		c.Header("Content-Type", "image/png")
-		c.Header("Cache-Control", "public, max-age=86400")
-		c.Data(http.StatusOK, "image/png", generateFallbackPNG(26, 28, 30, 400, 225))
+	if ctrl.fetchAndServeImage(c, imgUrl) {
 		return
 	}
 
-	req, err := http.NewRequest(http.MethodGet, imgUrl, nil)
-	if err != nil {
-		c.Status(http.StatusBadGateway)
-		return
-	}
-	req.Header.Set("User-Agent", bangumi.BangumiUserAgent)
-	req.Header.Set("Referer", "https://bgm.tv")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		c.Status(http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	c.Header("Cache-Control", "public, max-age=604800")
-	c.DataFromReader(resp.StatusCode, resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
+	c.Header("Content-Type", "image/png")
+	c.Header("Cache-Control", "public, max-age=86400")
+	c.Data(http.StatusOK, "image/png", generateFallbackPNG(26, 28, 30, 400, 225))
 }
 
 func (ctrl *ItemController) ProxyImage(c *gin.Context) {
@@ -494,27 +527,11 @@ func (ctrl *ItemController) ProxyImage(c *gin.Context) {
 		return
 	}
 
-	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, rawUrl, nil)
-	if err != nil {
-		c.Status(http.StatusBadRequest)
+	if ctrl.fetchAndServeImage(c, rawUrl) {
 		return
 	}
-	req.Header.Set("User-Agent", bangumi.BangumiUserAgent)
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		c.Status(http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	for k, v := range resp.Header {
-		if strings.HasPrefix(strings.ToLower(k), "content-") {
-			c.Header(k, v[0])
-		}
-	}
-	c.Header("Cache-Control", "public, max-age=604800")
-	_, _ = io.Copy(c.Writer, resp.Body)
+	c.Status(http.StatusBadGateway)
 }
 
 func isPrivateOrLoopback(hostname string) bool {

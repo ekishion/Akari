@@ -49,8 +49,11 @@ interface SettingsViewProps {
 
 const BGM_PRESETS = [
   { name: '官方直连 (默认)', url: 'https://api.bgm.tv' },
-  { name: 'Rin Cat 镜像', url: 'https://mirror.bgm.rin.cat' },
-  { name: 'Chii 镜像', url: 'https://chii.ai' },
+  { name: '官方 Next 源', url: 'https://next.bgm.tv' },
+]
+
+const BGM_IMAGE_PRESETS = [
+  { name: '官方图片源 (默认)', url: 'https://lain.bgm.tv' },
 ]
 
 const DANDAN_PRESETS = [
@@ -60,6 +63,8 @@ const DANDAN_PRESETS = [
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ config, onRefresh }) => {
   const [bangumiHost, setBangumiHost] = useState(config?.bangumiHost || 'https://api.bgm.tv')
+  const [bangumiImageHost, setBangumiImageHost] = useState(config?.bangumiImageHost || 'https://lain.bgm.tv')
+  const [enableECH, setEnableECH] = useState<boolean>(config?.enableECH !== false)
   const [dandanHost, setDanDanHost] = useState(config?.dandanHost || 'https://api.dandanplay.net')
   const [serverName, setServerName] = useState(config?.serverName || 'Akari Media')
   const [customProxy, setCustomProxy] = useState(config?.customProxy || '')
@@ -67,6 +72,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ config, onRefresh })
   useEffect(() => {
     if (config) {
       setBangumiHost(config.bangumiHost || 'https://api.bgm.tv')
+      setBangumiImageHost(config.bangumiImageHost || 'https://lain.bgm.tv')
+      setEnableECH(config.enableECH !== false)
       setDanDanHost(config.dandanHost || 'https://api.dandanplay.net')
       setServerName(config.serverName || 'Akari Media')
       setCustomProxy(config.customProxy || '')
@@ -79,6 +86,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ config, onRefresh })
 
   const [testingBgm, setTestingBgm] = useState(false)
   const [bgmTestResult, setBgmTestResult] = useState<MirrorTestResult | null>(null)
+
+  const [testingBgmImg, setTestingBgmImg] = useState(false)
+  const [bgmImgTestResult, setBgmImgTestResult] = useState<MirrorTestResult | null>(null)
 
   // Bilibili States
   const [biliStatus, setBiliStatus] = useState<BilibiliStatus | null>(null)
@@ -189,6 +199,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ config, onRefresh })
     }
   }
 
+  const handleTestBangumiImage = async (testUrl?: string) => {
+    const target = (testUrl || bangumiImageHost).trim()
+    if (!target) return
+    setTestingBgmImg(true)
+    setBgmImgTestResult(null)
+    try {
+      const res = await api.testBangumiImageMirror(target)
+      setBgmImgTestResult(res)
+    } catch (err: any) {
+      setBgmImgTestResult({
+        success: false,
+        error: err.message || '图片源连接测试失败',
+      })
+    } finally {
+      setTestingBgmImg(false)
+    }
+  }
+
   const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault()
     setSaveLoading(true)
@@ -198,6 +226,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ config, onRefresh })
     try {
       await api.updateConfig({
         bangumiHost: bangumiHost.trim(),
+        bangumiImageHost: bangumiImageHost.trim(),
+        enableECH: enableECH,
         dandanHost: dandanHost.trim(),
         serverName: serverName.trim(),
         customProxy: customProxy.trim(),
@@ -302,12 +332,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ config, onRefresh })
             />
           </div>
 
-          {/* Bangumi Mirrors */}
+          {/* Bangumi API & Mirror */}
           <div className="flex flex-col gap-3 pt-3 border-t border-[var(--md-outline-variant)]/40">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold text-[var(--md-on-surface)]">
-                Bangumi 元数据 API 镜像源
-              </label>
+              <div>
+                <label className="text-xs font-semibold text-[var(--md-on-surface)]">
+                  Bangumi 元数据 API 节点
+                </label>
+                <p className="text-[11px] text-[var(--md-on-surface-variant)]">
+                  用于刮削番剧日历、剧集信息、演职员与评分（默认官方源，支持配置自定义镜像站）
+                </p>
+              </div>
               <MdButton
                 type="button"
                 variant="outlined"
@@ -316,7 +351,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ config, onRefresh })
                 onClick={() => handleTestBangumi()}
                 icon={<Activity className="w-3.5 h-3.5" />}
               >
-                测速连通性
+                测速 API
               </MdButton>
             </div>
 
@@ -353,16 +388,107 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ config, onRefresh })
                 {bgmTestResult.success ? (
                   <>
                     <CheckCircle2 className="w-4 h-4 shrink-0" />
-                    <span>节点测试成功 · 延迟: {bgmTestResult.latencyMs}ms ({bgmTestResult.message || 'OK'})</span>
+                    <span>API 节点测试成功 · 延迟: {bgmTestResult.latencyMs}ms ({bgmTestResult.message || 'OK'})</span>
                   </>
                 ) : (
                   <>
                     <AlertCircle className="w-4 h-4 shrink-0" />
-                    <span>节点测试失败: {bgmTestResult.error}</span>
+                    <span>API 节点测试失败: {bgmTestResult.error}</span>
                   </>
                 )}
               </div>
             )}
+          </div>
+
+          {/* Bangumi Image Mirror */}
+          <div className="flex flex-col gap-3 pt-3 border-t border-[var(--md-outline-variant)]/40">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-xs font-semibold text-[var(--md-on-surface)]">
+                  Bangumi 封面与图片资源节点
+                </label>
+                <p className="text-[11px] text-[var(--md-on-surface-variant)]">
+                  用于拉取封面图片资源（默认官方源 lain.bgm.tv，支持配置自定义镜像站）
+                </p>
+              </div>
+              <MdButton
+                type="button"
+                variant="outlined"
+                size="sm"
+                loading={testingBgmImg}
+                onClick={() => handleTestBangumiImage()}
+                icon={<Activity className="w-3.5 h-3.5" />}
+              >
+                测速图片源
+              </MdButton>
+            </div>
+
+            <MdTextField
+              placeholder="https://lain.bgm.tv"
+              value={bangumiImageHost}
+              onChange={(e) => setBangumiImageHost(e.target.value)}
+            />
+
+            {/* Presets */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-[var(--md-on-surface-variant)]">快捷预设:</span>
+              {BGM_IMAGE_PRESETS.map((p) => (
+                <MdChip
+                  key={p.url}
+                  label={p.name}
+                  selected={bangumiImageHost === p.url}
+                  onClick={() => {
+                    setBangumiImageHost(p.url)
+                    handleTestBangumiImage(p.url)
+                  }}
+                />
+              ))}
+            </div>
+
+            {bgmImgTestResult && (
+              <div
+                className={`p-3 rounded-2xl text-xs flex items-center gap-2 border ${
+                  bgmImgTestResult.success
+                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                    : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20'
+                }`}
+              >
+                {bgmImgTestResult.success ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>图片节点测试成功 · 延迟: {bgmImgTestResult.latencyMs}ms ({bgmImgTestResult.message || 'OK'})</span>
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>图片节点测试失败: {bgmImgTestResult.error}</span>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ECH (Encrypted Client Hello) TLS 1.3 Security & Anti-blocking */}
+          <div className="flex flex-col gap-2 pt-3 border-t border-[var(--md-outline-variant)]/40">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-xs font-semibold text-[var(--md-on-surface)]">
+                  启用 ECH (Encrypted Client Hello) 握手加密
+                </label>
+                <p className="text-[11px] text-[var(--md-on-surface-variant)]">
+                  基于 TLS 1.3 与 DNS HTTPS (Type 65) 动态公钥，隐藏请求 SNI，有效突破 DNS 污染和 GFW/运营商 TLS 阻断
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enableECH}
+                  onChange={(e) => setEnableECH(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-hidden rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[var(--md-primary)]"></div>
+              </label>
+            </div>
           </div>
 
           {/* DanDanPlay Mirrors */}

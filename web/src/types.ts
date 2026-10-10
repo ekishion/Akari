@@ -31,6 +31,8 @@ export interface SystemConfig {
   dataDir: string
   dandanHost: string
   bangumiHost: string
+  bangumiImageHost?: string
+  enableECH?: boolean
   customProxy: string
   hasPassword: boolean
 }

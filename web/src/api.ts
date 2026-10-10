@@ -133,6 +133,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ url }),
     }),
+  testBangumiImageMirror: (url: string) =>
+    request<MirrorTestResult>('/api/system/bangumi-image/test', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }),
   cleanCache: () => request<{ status: string; message: string }>('/api/system/clean-cache', { method: 'POST' }),
 
   // Emby Users & Tokens

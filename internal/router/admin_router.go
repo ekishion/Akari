@@ -60,6 +60,7 @@ func (r *AdminRouter) RegisterRoutes(apiGroup *gin.RouterGroup) {
 		protected.PUT("/system/config", r.sysCtrl.UpdateConfig)
 		protected.POST("/system/clean-cache", r.sysCtrl.CleanCache)
 		protected.POST("/system/bangumi/test", r.sysCtrl.TestBangumiEndpoint)
+		protected.POST("/system/bangumi-image/test", r.sysCtrl.TestBangumiImageEndpoint)
 
 		// Bilibili
 		protected.GET("/bilibili/status", r.biliCtrl.GetBilibiliStatus)

@@ -37,19 +37,41 @@ func TestConcurrentBangumi(t *testing.T) {
 }
 
 func TestBaseUrlAndMirror(t *testing.T) {
-	client := NewClient("https://mirror.bgm.rin.cat/")
-	if client.GetBaseUrl() != "https://mirror.bgm.rin.cat" {
-		t.Fatalf("expected https://mirror.bgm.rin.cat, got %s", client.GetBaseUrl())
+	client := NewClient("https://next.bgm.tv/")
+	if client.GetBaseUrl() != "https://next.bgm.tv" {
+		t.Fatalf("expected https://next.bgm.tv, got %s", client.GetBaseUrl())
 	}
 
-	client.SetBaseUrl("https://chii.ai/")
-	if client.GetBaseUrl() != "https://chii.ai" {
-		t.Fatalf("expected https://chii.ai, got %s", client.GetBaseUrl())
+	client.SetBaseUrl("https://api.bgm.tv/")
+	if client.GetBaseUrl() != "https://api.bgm.tv" {
+		t.Fatalf("expected https://api.bgm.tv, got %s", client.GetBaseUrl())
 	}
 
 	client.SetBaseUrl("")
-	if client.GetBaseUrl() != "https://api.bgm.tv" {
-		t.Fatalf("expected default https://api.bgm.tv, got %s", client.GetBaseUrl())
+	if client.GetBaseUrl() != DefaultAPIBase {
+		t.Fatalf("expected default %s, got %s", DefaultAPIBase, client.GetBaseUrl())
+	}
+}
+
+func TestRewriteImageUrl(t *testing.T) {
+	client := NewClient("")
+	orig := "http://lain.bgm.tv/pic/cover/l/1c/b4/390200_1IA55.jpg"
+	rewritten := client.RewriteImageUrl(orig)
+	expected := "https://lain.bgm.tv/pic/cover/l/1c/b4/390200_1IA55.jpg"
+	if rewritten != expected {
+		t.Fatalf("expected %s, got %s", expected, rewritten)
+	}
+
+	origHttps := "https://lain.bgm.tv/pic/cover/l/1c/b4/390200_1IA55.jpg"
+	rewrittenHttps := client.RewriteImageUrl(origHttps)
+	if rewrittenHttps != expected {
+		t.Fatalf("expected %s, got %s", expected, rewrittenHttps)
+	}
+
+	client.SetImageHost("https://custom-image-mirror.com")
+	customRewritten := client.RewriteImageUrl(orig)
+	if customRewritten != "https://custom-image-mirror.com/pic/cover/l/1c/b4/390200_1IA55.jpg" {
+		t.Fatalf("expected custom host after SetImageHost, got %s", customRewritten)
 	}
 }
 

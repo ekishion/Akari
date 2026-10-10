@@ -21,9 +21,11 @@ type Config struct {
 	DataDir       string
 	AdminUsername string
 	AdminPassword string
-	PublicHost    string
-	BangumiHost   string
-	DanDanHost    string
+	PublicHost       string
+	BangumiHost      string
+	BangumiImageHost string
+	DanDanHost       string
+	EnableECH        bool
 }
 
 func LoadConfig() (*Config, error) {
@@ -42,16 +44,18 @@ func LoadConfig() (*Config, error) {
 	}
 
 	cfg := &Config{
-		HttpPort:      httpPort,
-		UdpPort:       getEnvInt("UDP_PORT", 7359),
-		ServerName:    getEnv("SERVER_NAME", "Akari Media"),
-		ServerId:      serverId,
-		DataDir:       dataDir,
-		AdminUsername: getEnv("ADMIN_USERNAME", "admin"),
-		AdminPassword: getEnv("ADMIN_PASSWORD", ""),
-		PublicHost:    getEnv("PUBLIC_HOST", ""),
-		BangumiHost:   getEnv("BANGUMI_HOST", "https://api.bgm.tv"),
-		DanDanHost:    getEnv("DANDAN_HOST", "https://api.dandanplay.net"),
+		HttpPort:         httpPort,
+		UdpPort:          getEnvInt("UDP_PORT", 7359),
+		ServerName:       getEnv("SERVER_NAME", "Akari Media"),
+		ServerId:         serverId,
+		DataDir:          dataDir,
+		AdminUsername:    getEnv("ADMIN_USERNAME", "admin"),
+		AdminPassword:    getEnv("ADMIN_PASSWORD", ""),
+		PublicHost:       getEnv("PUBLIC_HOST", ""),
+		BangumiHost:      getEnv("BANGUMI_HOST", "https://api.bgm.tv"),
+		BangumiImageHost: getEnv("BANGUMI_IMAGE_HOST", "https://lain.bgm.tv"),
+		DanDanHost:       getEnv("DANDAN_HOST", "https://api.dandanplay.net"),
+		EnableECH:        getEnv("ENABLE_ECH", "true") == "true" || getEnv("ENABLE_ECH", "1") == "1",
 	}
 
 	return cfg, nil

@@ -109,23 +109,27 @@ func (ctrl *SystemController) GetConfig(c *gin.Context) {
 		hasPassword = adminUser.HasPassword
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"serverName":  ctrl.cfg.ServerName,
-		"serverId":    ctrl.cfg.ServerId,
-		"httpPort":    ctrl.cfg.HttpPort,
-		"udpPort":     ctrl.cfg.UdpPort,
-		"dataDir":     ctrl.cfg.DataDir,
-		"dandanHost":  ctrl.cfg.DanDanHost,
-		"bangumiHost": ctrl.cfg.BangumiHost,
-		"customProxy": proxy,
-		"hasPassword": hasPassword,
+		"serverName":       ctrl.cfg.ServerName,
+		"serverId":         ctrl.cfg.ServerId,
+		"httpPort":         ctrl.cfg.HttpPort,
+		"udpPort":          ctrl.cfg.UdpPort,
+		"dataDir":          ctrl.cfg.DataDir,
+		"dandanHost":       ctrl.cfg.DanDanHost,
+		"bangumiHost":      ctrl.cfg.BangumiHost,
+		"bangumiImageHost": ctrl.cfg.BangumiImageHost,
+		"enableECH":        ctrl.cfg.EnableECH,
+		"customProxy":      proxy,
+		"hasPassword":      hasPassword,
 	})
 }
 
 type UpdateConfigReq struct {
-	ServerName  *string `json:"serverName"`
-	BangumiHost *string `json:"bangumiHost"`
-	DanDanHost  *string `json:"dandanHost"`
-	CustomProxy *string `json:"customProxy"`
+	ServerName       *string `json:"serverName"`
+	BangumiHost      *string `json:"bangumiHost"`
+	BangumiImageHost *string `json:"bangumiImageHost"`
+	EnableECH        *bool   `json:"enableECH"`
+	DanDanHost       *string `json:"dandanHost"`
+	CustomProxy      *string `json:"customProxy"`
 }
 
 func (ctrl *SystemController) UpdateConfig(c *gin.Context) {
@@ -150,6 +154,34 @@ func (ctrl *SystemController) UpdateConfig(c *gin.Context) {
 			if ctrl.settingRepo != nil {
 				_ = ctrl.settingRepo.SaveSetting("bangumi_host", host)
 			}
+		}
+	}
+
+	if req.BangumiImageHost != nil {
+		host := strings.TrimSpace(*req.BangumiImageHost)
+		host = strings.TrimRight(host, "/")
+		if host != "" {
+			if !strings.HasPrefix(host, "http://") && !strings.HasPrefix(host, "https://") {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Bangumi 图片镜像源必须以 http:// 或 https:// 开头"})
+				return
+			}
+			ctrl.cfg.BangumiImageHost = host
+			if ctrl.bgmClient != nil {
+				ctrl.bgmClient.SetImageHost(host)
+			}
+			if ctrl.settingRepo != nil {
+				_ = ctrl.settingRepo.SaveSetting("bangumi_image_host", host)
+			}
+		}
+	}
+
+	if req.EnableECH != nil {
+		ctrl.cfg.EnableECH = *req.EnableECH
+		if ctrl.bgmClient != nil {
+			ctrl.bgmClient.SetEnableECH(*req.EnableECH)
+		}
+		if ctrl.settingRepo != nil {
+			_ = ctrl.settingRepo.SaveSetting("enable_ech", strconv.FormatBool(*req.EnableECH))
 		}
 	}
 
@@ -218,6 +250,32 @@ func (ctrl *SystemController) TestBangumiEndpoint(c *gin.Context) {
 		"success":   true,
 		"latencyMs": latency,
 		"message":   "镜像源连接正常",
+	})
+}
+
+func (ctrl *SystemController) TestBangumiImageEndpoint(c *gin.Context) {
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.URL) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "URL 不能为空"})
+		return
+	}
+
+	latency, err := ctrl.bgmClient.TestImageEndpoint(req.URL)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success":   false,
+			"latencyMs": latency,
+			"error":     err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":   true,
+		"latencyMs": latency,
+		"message":   "图片镜像源连接正常",
 	})
 }
 
